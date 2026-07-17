@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Check, FileJson, RefreshCw, RotateCcw, Undo2 } from "lucide-react";
 import {
   DEFAULT_SETTINGS,
@@ -144,12 +144,12 @@ export default function Settings() {
   const dirty = JSON.stringify(s) !== JSON.stringify(savedSnapshot);
 
   const openSettingsFile = async () => {
+    await saveSettings(s);
     const path = await join(await appDataDir(), "settings.json");
-    await openPath(path);
+    await revealItemInDir(path);
   };
 
-  // The global hotkey is OS-grabbed even when the popup is unfocused, so it
-  // would swallow any in-popup shortcut bound to the same combo. Flag it.
+
   const entries: [string, string][] = [
     ["Global hotkey", s.hotkey],
     ...ACTION_ORDER.map((id): [string, string] => [ACTION_LABELS[id], s.shortcuts[id]]),
@@ -174,7 +174,7 @@ export default function Settings() {
             <button
               type="button"
               onClick={openSettingsFile}
-              title="Open settings.json"
+              title="Show settings.json in file manager"
               className="rounded-lg p-2 text-muted hover:bg-accent hover:text-fg"
             >
               <FileJson size={16} />
@@ -378,7 +378,7 @@ export default function Settings() {
           </h2>
           <Field
             label="Global hotkey"
-            hint="Click, then press a key combo. Works even when easyinput isn't focused."
+            hint="Click, then press a key combo. Works even when JInk isn't focused."
           >
             <KeyCapture value={s.hotkey} onChange={(v) => set("hotkey", v)} />
             {conflictsFor("Global hotkey", s.hotkey) && (

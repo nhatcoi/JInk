@@ -48,7 +48,7 @@ export const DEFAULT_SHORTCUTS: Record<ActionId, string> = {
   voice: "CmdOrCtrl+KeyM",
   undo: "CmdOrCtrl+KeyZ",
   redo: "CmdOrCtrl+Shift+KeyZ",
-  openSettings: "CmdOrCtrl+Comma",
+  openSettings: "CmdOrCtrl+Backquote",
 };
 
 const MODIFIER_CODES = new Set([

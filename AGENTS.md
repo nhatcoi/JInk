@@ -1,4 +1,4 @@
-# easyinput — logic notes for agents
+# JInk — logic notes for agents
 
 Tauri 2 + React quick-input popup. Global hotkey → popup at cursor → type/AI-enhance/translate/voice → inject into whatever app had focus.
 

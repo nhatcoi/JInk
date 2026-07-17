@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128@2x.png" width="96" alt="easyinput logo" />
+<img src="src-tauri/icons/128x128@2x.png" width="96" alt="JInk logo" />
 
-# easyinput
+# JInk
 
 **A floating quick-input popup for every text field on your machine.**
 
@@ -21,17 +21,17 @@ AI-polish or dictate → hit Insert → the text lands in whatever app had focus
 ## How it works
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  Ctrl+Alt+Space  ──►  popup appears at your cursor        │
-│                                                           │
-│   ┌─────────────────────────────────────────────────┐     │
-│   │  toi muon viet mail cho khach hang              │     │
-│   │                                                 │     │
-│   │  [ Enhance ] [ VI⇄EN ] [ Voice ] [ Settings ]   │     │
-│   └─────────────────────────────────────────────────┘     │
-│                                                           │
-│  Enter  ──►  text pasted into Claude / terminal / editor  │
-└───────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ Alt+Space  ──►  popup appears at your cursor            │
+│                                                         │
+│   ┌──────────────────────────────────────────────┐      │
+│   │ toi muon viet mail cho khach hang            │      │
+│   │                                              │      │
+│   │[ Enhance ] [ VI⇄EN ] [ Voice ] [ Settings ] │      │
+│   └──────────────────────────────────────────────┘      │
+│                                                         │
+│ Enter  ──►  text pasted into Claude / terminal / editor │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## Download
@@ -40,11 +40,11 @@ Grab the latest build from the [**Releases page**](https://github.com/nhatcoi/JI
 
 | Platform | File | Install |
 | --- | --- | --- |
-| **Windows** | `easyinput_x.y.z_x64-setup.exe` | Run the NSIS installer |
-| **macOS** | `easyinput_x.y.z_universal.dmg` | Apple Silicon + Intel |
-| **Linux (Debian/Ubuntu)** | `easyinput_x.y.z_amd64.deb` | `sudo dpkg -i easyinput_*.deb` |
-| **Linux (Fedora/RHEL)** | `easyinput-x.y.z-1.x86_64.rpm` | `sudo rpm -i easyinput-*.rpm` |
-| **Linux (any distro)** | `easyinput_x.y.z_amd64.AppImage` | `chmod +x` then run |
+| **Windows** | `JInk_x.y.z_x64-setup.exe` | Run the NSIS installer |
+| **macOS** | `JInk_x.y.z_universal.dmg` | Apple Silicon + Intel |
+| **Linux (Debian/Ubuntu)** | `JInk_x.y.z_amd64.deb` | `sudo dpkg -i JInk_*.deb` |
+| **Linux (Fedora/RHEL)** | `JInk-x.y.z-1.x86_64.rpm` | `sudo rpm -i JInk-*.rpm` |
+| **Linux (any distro)** | `JInk_x.y.z_amd64.AppImage` | `chmod +x` then run |
 
 > Linux needs `xdotool` at runtime for paste injection:
 > `sudo apt install xdotool` / `sudo dnf install xdotool`

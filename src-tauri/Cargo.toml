@@ -1,12 +1,12 @@
 [package]
-name = "easyinput"
+name = "jink"
 version = "0.1.2"
 description = "Quick input popup with translate, AI enhance and voice"
 authors = ["nhatcoi"]
 edition = "2021"
 
 [lib]
-name = "easyinput_lib"
+name = "jink_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

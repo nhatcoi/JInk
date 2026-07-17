@@ -50,6 +50,9 @@ export default function Popup() {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // Whether `status` is an AI-config error (bad base URL/key/model) — shows a
+  // link into Settings instead of just the raw message.
+  const [statusIsAiError, setStatusIsAiError] = useState(false);
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -96,6 +99,7 @@ export default function Popup() {
     const un = listen("popup-shown", () => {
       loadSettings().then(setSettings);
       setStatus(null);
+      setStatusIsAiError(false);
       autosize();
       [0, 60, 150, 250].forEach((d) => setTimeout(focusEditor, d));
     });
@@ -147,6 +151,7 @@ export default function Popup() {
     setText("");
     setAttachments([]);
     setStatus(null);
+    setStatusIsAiError(false);
     history.clear("");
   }, [history]);
 
@@ -160,6 +165,7 @@ export default function Popup() {
       await invoke("inject_text", { text: t });
       reset();
     } catch (e) {
+      setStatusIsAiError(false);
       setStatus(String(e));
     }
   }, [text, attachments, reset]);
@@ -183,6 +189,7 @@ export default function Popup() {
       history.pause();
       setBusy(true);
       setStatus(null);
+      setStatusIsAiError(false);
       let acc = "";
       setText("");
       cancelRef.current = await runAiStream(settings, messages, {
@@ -199,6 +206,7 @@ export default function Popup() {
           setText(before);
           history.resumeWith(before, before);
           setStatus(friendlyAiError(e));
+          setStatusIsAiError(true);
         },
       });
     },
@@ -235,7 +243,8 @@ export default function Popup() {
         const t = await transcribe(blob, settings);
         setText((prev) => (prev ? prev + " " : "") + t);
       } catch (e) {
-        setStatus(String(e));
+        setStatus(friendlyAiError(String(e)));
+        setStatusIsAiError(true);
       } finally {
         setBusy(false);
       }
@@ -245,7 +254,9 @@ export default function Popup() {
       recorderRef.current = await startRecording(settings.micDeviceId || undefined);
       setRecording(true);
       setStatus(null);
+      setStatusIsAiError(false);
     } catch (e) {
+      setStatusIsAiError(false);
       setStatus("Microphone unavailable: " + String(e));
     }
   };
@@ -269,6 +280,7 @@ export default function Popup() {
         ]);
       }
     } catch (e) {
+      setStatusIsAiError(false);
       setStatus(String(e));
     } finally {
       suppressBlurRef.current = false;
@@ -362,7 +374,7 @@ export default function Popup() {
             data-tauri-drag-region
             className="text-[11px] font-medium tracking-wide text-muted"
           >
-            easyinput
+            JInk
           </span>
           <div className="flex items-center gap-0.5">
             <IconButton
@@ -431,7 +443,17 @@ export default function Popup() {
         )}
 
         {status && (
-          <div className="px-3.5 pb-1 text-[11px] text-red-500">{status}</div>
+          <div className="flex items-center gap-1.5 px-3.5 pb-1 text-[11px] text-red-500">
+            <span>{status}</span>
+            {statusIsAiError && (
+              <button
+                onClick={() => invoke("open_settings")}
+                className="underline underline-offset-2 hover:text-red-400"
+              >
+                Open settings
+              </button>
+            )}
+          </div>
         )}
 
         {/* toolbar */}

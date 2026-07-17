@@ -19,8 +19,8 @@ export type Settings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  aiBaseUrl: "https://api.openai.com/v1",
-  aiModel: "gpt-4o-mini",
+  aiBaseUrl: "",
+  aiModel: "",
   aiKey: "",
   hotkey: "Alt+Space",
   width: 700,
@@ -28,7 +28,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shortcuts: DEFAULT_SHORTCUTS,
   translateFrom: "auto",
   translateTo: "en",
-  hideOnBlur: false,
+  hideOnBlur: true,
   micDeviceId: "",
 };
 

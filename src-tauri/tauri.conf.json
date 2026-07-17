@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "easyinput",
+  "productName": "JInk",
   "version": "0.1.2",
-  "identifier": "com.nhatcoi.easyinput",
+  "identifier": "com.nhatcoi.jink",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "popup",
-        "title": "easyinput",
+        "title": "JInk",
         "url": "index.html",
         "width": 700,
         "height": 150,
@@ -21,7 +21,7 @@
         "minHeight": 96,
         "decorations": false,
         "transparent": true,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
         "resizable": true,
         "visible": false,

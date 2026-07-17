@@ -120,12 +120,18 @@ struct ModelEntry {
 }
 
 /// Well-known local OpenAI-compatible servers, by default host:port.
+/// One entry per port — TabbyAPI shares 5000 with text-generation-webui, and
+/// Open WebUI proxies whatever backend it fronts, so they're not listed apart.
 const LOCAL_CANDIDATES: &[(&str, u16)] = &[
     ("Ollama", 11434),
     ("LM Studio", 1234),
     ("llama.cpp server", 8080),
     ("text-generation-webui", 5000),
     ("vLLM", 8000),
+    ("Jan", 1337),
+    ("GPT4All", 4891),
+    ("SGLang", 30000),
+    ("Open WebUI", 3000),
 ];
 
 /// Probe well-known local ports for a running OpenAI-compatible `/v1/models`
@@ -187,20 +193,108 @@ pub async fn detect_local() -> Vec<LocalProvider> {
             });
         }
     }
+    for (name, port, dirs) in GGUF_ECOSYSTEMS {
+        if found.iter().any(|p| p.name == *name) {
+            continue;
+        }
+        let models = scan_gguf_dirs(dirs);
+        if !models.is_empty() {
+            found.push(LocalProvider {
+                name: (*name).into(),
+                base_url: format!("http://127.0.0.1:{port}/v1"),
+                models,
+                running: false,
+            });
+        }
+    }
 
     found
+}
+
+/// Runtimes that keep plain `.gguf` files under a home-relative folder, so a
+/// recursive scan is enough to list what's downloaded. Ollama and LM Studio
+/// have their own layouts and are handled separately above; vLLM, SGLang and
+/// Open WebUI don't own a model store worth scanning (they load from the HF
+/// cache or front another backend), so they're detected only when running.
+const GGUF_ECOSYSTEMS: &[(&str, u16, &[&str])] = &[
+    ("Jan", 1337, &[".jan/models"]),
+    (
+        "GPT4All",
+        4891,
+        &[".local/share/nomic.ai/GPT4All", ".gpt4all"],
+    ),
+    (
+        "llama.cpp server",
+        8080,
+        &[".cache/llama.cpp", ".llama.cpp/models"],
+    ),
+    (
+        "text-generation-webui",
+        5000,
+        &[".text-generation-webui/models"],
+    ),
+    ("TabbyAPI", 5000, &[".tabby/models"]),
+];
+
+/// Recursively collect `.gguf` filenames under any of the given home-relative
+/// dirs, capped so a stray huge tree can't stall detection.
+fn scan_gguf_dirs(dirs: &[&str]) -> Vec<String> {
+    let Some(home) = home_dir() else { return vec![] };
+    let mut out = vec![];
+    for dir in dirs {
+        collect_gguf(&home.join(dir), 0, &mut out);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_gguf(dir: &std::path::Path, depth: usize, out: &mut Vec<String>) {
+    if depth > 4 || out.len() >= 50 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_gguf(&path, depth + 1, out);
+        } else if path.extension().is_some_and(|e| e == "gguf") {
+            if let Some(stem) = path.file_stem() {
+                out.push(stem.to_string_lossy().to_string());
+            }
+        }
+    }
 }
 
 fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
+#[derive(Deserialize)]
+struct OllamaManifest {
+    layers: Vec<OllamaLayer>,
+}
+
+#[derive(Deserialize)]
+struct OllamaLayer {
+    digest: String,
+}
+
 /// Models pulled via `ollama pull` but not necessarily loaded — Ollama keeps
 /// one manifest file per tag under the library folder regardless of whether
 /// the server process is running.
+///
+/// A manifest alone doesn't mean the model is usable: interrupted pulls and
+/// blob garbage collection both leave manifests whose weights are gone, which
+/// `ollama list` hides but a naive directory count reports. Only count a tag
+/// once every layer blob it references is on disk.
 fn scan_ollama_installed() -> Vec<String> {
     let Some(home) = home_dir() else { return vec![] };
-    let base = home.join(".ollama/models/manifests/registry.ollama.ai/library");
+    let root = home.join(".ollama/models");
+    let blobs = root.join("blobs");
+    let base = root.join("manifests/registry.ollama.ai/library");
     let Ok(models) = std::fs::read_dir(&base) else {
         return vec![];
     };
@@ -208,13 +302,30 @@ fn scan_ollama_installed() -> Vec<String> {
         .flatten()
         .flat_map(|model| {
             let model_name = model.file_name().to_string_lossy().to_string();
+            let blobs = blobs.clone();
             std::fs::read_dir(model.path())
                 .into_iter()
                 .flatten()
                 .flatten()
+                .filter(move |tag| ollama_tag_complete(&tag.path(), &blobs))
                 .map(move |tag| format!("{model_name}:{}", tag.file_name().to_string_lossy()))
         })
         .collect()
+}
+
+/// Ollama stores each layer under `blobs/` with `:` in the digest replaced by `-`.
+fn ollama_tag_complete(manifest: &std::path::Path, blobs: &std::path::Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(manifest) else {
+        return false;
+    };
+    let Ok(parsed) = serde_json::from_str::<OllamaManifest>(&raw) else {
+        return false;
+    };
+    !parsed.layers.is_empty()
+        && parsed
+            .layers
+            .iter()
+            .all(|layer| blobs.join(layer.digest.replace(':', "-")).exists())
 }
 
 /// LM Studio downloads GGUF files under `<publisher>/<repo>/*.gguf`, in

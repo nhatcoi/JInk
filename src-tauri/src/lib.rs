@@ -20,7 +20,6 @@ fn show_popup(app: &AppHandle) {
     position_at_cursor(app, &win);
     let _ = win.show();
     let _ = win.unminimize();
-    let _ = win.set_always_on_top(true);
     let _ = win.set_focus();
     let _ = win.emit("popup-shown", ());
 
@@ -44,7 +43,7 @@ fn show_popup(app: &AppHandle) {
 #[cfg(target_os = "linux")]
 fn force_focus_x11() {
     let _ = std::process::Command::new("xdotool")
-        .args(["search", "--onlyvisible", "--name", "^easyinput$", "windowactivate"])
+        .args(["search", "--onlyvisible", "--name", "^JInk$", "windowactivate"])
         .status();
 }
 
@@ -203,7 +202,7 @@ fn build_settings_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
         SETTINGS,
         tauri::WebviewUrl::App("index.html#/settings".into()),
     )
-    .title("easyinput — Settings")
+    .title("JInk — Settings")
     .inner_size(560.0, 640.0)
     .resizable(true)
     .visible(false)
@@ -290,7 +289,7 @@ pub fn run() {
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .tooltip("easyinput")
+                .tooltip("JInk")
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "open" => show_popup(app),
                     "settings" => {
@@ -316,9 +315,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, event| {
-            // Stay alive in the tray after windows close.
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+            // Stay alive in the tray after windows close, but let an
+            // explicit app.exit() (tray "Quit") go through — code is None
+            // when the exit was triggered by closing the last window, and
+            // Some(_) when requested programmatically.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
             }
         });
 }
