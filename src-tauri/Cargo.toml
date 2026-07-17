@@ -1,6 +1,6 @@
 [package]
 name = "easyinput"
-version = "0.1.0"
+version = "0.1.1"
 description = "Quick input popup with translate, AI enhance and voice"
 authors = ["nhatcoi"]
 edition = "2021"
