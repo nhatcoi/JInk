@@ -31,6 +31,11 @@ anyhow = "1"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 enigo = "0.3"
 
+# WebKitGTK blocks getUserMedia by default with no permission prompt; we grant
+# media access to our own windows explicitly (see setup() in lib.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0"
+
 [profile.release]
 codegen-units = 1
 lto = true

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { languageName } from "./languages";
 import type { Settings } from "./settings";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -61,6 +62,14 @@ export async function runAiStream(
   return cleanup;
 }
 
+/** Turn a raw reqwest/network error into something a user can act on. */
+export function friendlyAiError(raw: string): string {
+  if (/error sending request|tcp connect|connection refused|dns error/i.test(raw)) {
+    return "Can't reach the AI server — check Base URL/Model in Settings, or start your local AI.";
+  }
+  return raw;
+}
+
 export function enhancePrompt(text: string): ChatMessage[] {
   return [
     {
@@ -77,13 +86,14 @@ export function translatePrompt(
   from: string,
   to: string,
 ): ChatMessage[] {
-  const lang = (c: string) => (c === "vi" ? "Vietnamese" : "English");
+  const instruction =
+    from === "auto"
+      ? `Detect the source language and translate it to ${languageName(to)}.`
+      : `Translate from ${languageName(from)} to ${languageName(to)}.`;
   return [
     {
       role: "system",
-      content: `Translate from ${lang(from)} to ${lang(
-        to,
-      )}. Return ONLY the translation, no quotes, no explanation.`,
+      content: `${instruction} Return ONLY the translation, no quotes, no explanation.`,
     },
     { role: "user", content: text },
   ];

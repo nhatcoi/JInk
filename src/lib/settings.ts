@@ -1,16 +1,21 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
+import { DEFAULT_SHORTCUTS, type ActionId } from "@/lib/shortcuts";
 
 export type Settings = {
   aiBaseUrl: string;
   aiModel: string;
   aiKey: string;
+  /** Global hotkey that shows/hides the popup — works even when unfocused. */
   hotkey: string;
   width: number;
   height: number;
-  submitKey: "enter" | "mod-enter";
-  translateFrom: "vi" | "en";
-  translateTo: "vi" | "en";
+  /** In-popup action shortcuts (insert, close, enhance, …) — only fire while focused. */
+  shortcuts: Record<ActionId, string>;
+  translateFrom: string;
+  translateTo: string;
   hideOnBlur: boolean;
+  /** MediaDeviceInfo.deviceId of the mic to record with — "" means system default. */
+  micDeviceId: string;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -20,10 +25,11 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkey: "Alt+Space",
   width: 700,
   height: 150,
-  submitKey: "enter",
-  translateFrom: "vi",
+  shortcuts: DEFAULT_SHORTCUTS,
+  translateFrom: "auto",
   translateTo: "en",
   hideOnBlur: false,
+  micDeviceId: "",
 };
 
 let store: Store | null = null;
@@ -37,7 +43,18 @@ async function getStore(): Promise<Store> {
 export async function loadSettings(): Promise<Settings> {
   const s = await getStore();
   const saved = (await s.get<Partial<Settings>>("settings")) ?? {};
-  return { ...DEFAULT_SETTINGS, ...saved };
+  // Undo was Ctrl+Alt+Z before it owned Ctrl+Z — drop the stale binding.
+  const savedShortcuts: Partial<Record<ActionId, string>> = {
+    ...saved.shortcuts,
+  };
+  if (savedShortcuts.undo === "CmdOrCtrl+Alt+KeyZ") delete savedShortcuts.undo;
+  return {
+    ...DEFAULT_SETTINGS,
+    ...saved,
+    // Shallow-spread would drop any default action missing from an older
+    // settings.json (e.g. one saved before a new action was added).
+    shortcuts: { ...DEFAULT_SHORTCUTS, ...savedShortcuts },
+  };
 }
 
 export async function saveSettings(next: Settings): Promise<void> {

@@ -1,7 +1,7 @@
 mod ai;
 mod inject;
 
-use ai::{AiConfig, ChatMessage};
+use ai::{AiConfig, ChatMessage, LocalProvider};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -10,6 +10,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const POPUP: &str = "popup";
+const SETTINGS: &str = "settings";
 
 /// Show the popup at the cursor and focus it.
 fn show_popup(app: &AppHandle) {
@@ -49,6 +50,21 @@ fn force_focus_x11() {
 
 fn hide_popup(win: &Window) {
     let _ = win.hide();
+}
+
+/// WebKitGTK denies `getUserMedia` with no prompt unless the host app grants
+/// it via the `permission-request` signal. Auto-grant our own windows so the
+/// voice-input mic works (there's no OS-level mic permission dialog on Linux
+/// the way there is on macOS).
+#[cfg(target_os = "linux")]
+fn allow_media_permissions(win: &tauri::WebviewWindow) {
+    use webkit2gtk::{PermissionRequestExt, WebViewExt};
+    let _ = win.with_webview(|webview| {
+        webview.inner().connect_permission_request(|_, request| {
+            request.allow();
+            true
+        });
+    });
 }
 
 /// Position the popup below-right of the cursor, clamped to its monitor.
@@ -158,6 +174,19 @@ async fn ai_stream(
     ai::stream_chat(window, config, messages, request_id).await;
 }
 
+/// Scan well-known local ports (Ollama, LM Studio, llama.cpp server, …) for a
+/// running OpenAI-compatible endpoint and list their available models.
+#[tauri::command]
+async fn detect_local_ai() -> Vec<LocalProvider> {
+    ai::detect_local().await
+}
+
+/// Start a local runtime found installed-but-not-running (Ollama, LM Studio).
+#[tauri::command]
+async fn start_local_ai(name: String) -> Result<String, String> {
+    ai::start_local(&name).await
+}
+
 /// Re-register the global hotkey (unregister everything first).
 #[tauri::command]
 fn set_hotkey(app: AppHandle, accelerator: String) -> Result<(), String> {
@@ -166,24 +195,38 @@ fn set_hotkey(app: AppHandle, accelerator: String) -> Result<(), String> {
     gs.register(accelerator.as_str()).map_err(|e| e.to_string())
 }
 
-/// Open (or focus) the settings window.
-#[tauri::command]
-fn open_settings(app: AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("settings") {
-        let _ = win.show();
-        let _ = win.set_focus();
-        return Ok(());
-    }
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        "settings",
+/// Build the settings window hidden. A webview costs ~a second to create, so
+/// it's built once at startup and reused — closing it only hides it.
+fn build_settings_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    let win = tauri::WebviewWindowBuilder::new(
+        app,
+        SETTINGS,
         tauri::WebviewUrl::App("index.html#/settings".into()),
     )
     .title("easyinput — Settings")
     .inner_size(560.0, 640.0)
     .resizable(true)
+    .visible(false)
     .build()
     .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    allow_media_permissions(&win);
+    Ok(win)
+}
+
+/// Open (or focus) the settings window.
+#[tauri::command]
+fn open_settings(app: AppHandle) -> Result<(), String> {
+    // Prewarmed in setup(); rebuild only if that failed.
+    let win = match app.get_webview_window(SETTINGS) {
+        Some(w) => w,
+        None => build_settings_window(&app)?,
+    };
+    let _ = win.show();
+    let _ = win.unminimize();
+    let _ = win.set_focus();
+    // Window outlives a close, so its state is stale.
+    let _ = win.emit("settings-shown", ());
     Ok(())
 }
 
@@ -216,9 +259,21 @@ pub fn run() {
             ai_stream,
             set_hotkey,
             open_settings,
-            focused_window_is_helper
+            focused_window_is_helper,
+            detect_local_ai,
+            start_local_ai
         ])
         .setup(|app| {
+            #[cfg(target_os = "linux")]
+            if let Some(win) = app.get_webview_window(POPUP) {
+                allow_media_permissions(&win);
+            }
+
+            // Prewarm the settings webview so the first open is instant.
+            if let Err(e) = build_settings_window(app.handle()) {
+                eprintln!("settings window prewarm failed: {e}");
+            }
+
             // Default hotkey; the frontend re-registers from settings.
             // (Alt+Space may collide with KDE KRunner — free it in KDE first.)
             let gs = app.global_shortcut();
@@ -247,6 +302,16 @@ pub fn run() {
                 .build(app)?;
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Keep the settings webview alive — a destroy means the next open
+            // pays for a full rebuild.
+            if window.label() == SETTINGS {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

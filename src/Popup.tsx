@@ -9,6 +9,7 @@ import {
   Loader2,
   Mic,
   Paperclip,
+  Redo2,
   Settings2,
   Sparkles,
   Undo2,
@@ -21,8 +22,10 @@ import {
   loadSettings,
   type Settings,
 } from "@/lib/settings";
-import { enhancePrompt, runAiStream, translatePrompt } from "@/lib/ai";
+import { enhancePrompt, friendlyAiError, runAiStream, translatePrompt } from "@/lib/ai";
 import { startRecording, transcribe } from "@/lib/voice";
+import { formatAccelerator, matchesAccelerator } from "@/lib/shortcuts";
+import { useUndo } from "@/lib/useUndo";
 
 type Attachment = {
   id: string;
@@ -47,7 +50,6 @@ export default function Popup() {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const [undoText, setUndoText] = useState<string | null>(null);
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -55,8 +57,12 @@ export default function Popup() {
     null,
   );
   const cancelRef = useRef<(() => void) | null>(null);
+  // Text from before the running AI stream replaced it.
+  const streamBaseRef = useRef("");
   // True while our own file dialog is open — its blur shouldn't hide us.
   const suppressBlurRef = useRef(false);
+
+  const history = useUndo(text, setText, taRef);
 
   // Load settings and register the hotkey.
   useEffect(() => {
@@ -141,8 +147,8 @@ export default function Popup() {
     setText("");
     setAttachments([]);
     setStatus(null);
-    setUndoText(null);
-  }, []);
+    history.clear("");
+  }, [history]);
 
   const insert = useCallback(async () => {
     // Append picked file paths so the target app receives them.
@@ -164,13 +170,17 @@ export default function Popup() {
       if (busy) {
         cancelRef.current?.();
         setBusy(false);
+        history.resumeWith(streamBaseRef.current, text);
         return;
       }
-      if (!settings.aiKey) {
-        setStatus("Set an API key in Settings first.");
-        return;
-      }
-      setUndoText(text);
+      // if (!settings.aiKey) {
+      //   setStatus("Set an API key in Settings first.");
+      //   return;
+      // }
+      // Token-by-token rewrite is one undo step, not hundreds.
+      const before = text;
+      streamBaseRef.current = before;
+      history.pause();
       setBusy(true);
       setStatus(null);
       let acc = "";
@@ -180,15 +190,19 @@ export default function Popup() {
           acc += tk;
           setText(acc);
         },
-        onDone: () => setBusy(false),
+        onDone: () => {
+          setBusy(false);
+          history.resumeWith(before, acc);
+        },
         onError: (e) => {
           setBusy(false);
-          setText(undoText ?? text);
-          setStatus(e);
+          setText(before);
+          history.resumeWith(before, before);
+          setStatus(friendlyAiError(e));
         },
       });
     },
-    [busy, settings, text, undoText],
+    [busy, settings, text, history],
   );
 
   const enhance = () => text.trim() && streamInto(enhancePrompt(text.trim()));
@@ -198,18 +212,14 @@ export default function Popup() {
       translatePrompt(text.trim(), settings.translateFrom, settings.translateTo),
     );
 
-  const swapLang = () =>
+  const swapLang = () => {
+    // "auto" only makes sense as a source — swapping it into "to" is meaningless.
+    if (settings.translateFrom === "auto") return;
     setSettings((s) => ({
       ...s,
       translateFrom: s.translateTo,
       translateTo: s.translateFrom,
     }));
-
-  const undo = () => {
-    if (undoText !== null) {
-      setText(undoText);
-      setUndoText(null);
-    }
   };
 
   // --- Voice ---
@@ -232,7 +242,7 @@ export default function Popup() {
       return;
     }
     try {
-      recorderRef.current = await startRecording();
+      recorderRef.current = await startRecording(settings.micDeviceId || undefined);
       setRecording(true);
       setStatus(null);
     } catch (e) {
@@ -299,23 +309,43 @@ export default function Popup() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      hide();
+    // Shift+Enter is always a newline — never overridable by a bound shortcut.
+    if (e.code === "Enter" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       return;
     }
-    const mod = e.metaKey || e.ctrlKey;
-    const submit =
-      settings.submitKey === "enter"
-        ? e.key === "Enter" && !e.shiftKey && !mod
-        : e.key === "Enter" && mod;
-    if (submit) {
+    const sc = settings.shortcuts;
+    if (matchesAccelerator(e, sc.close)) {
+      e.preventDefault();
+      hide();
+    } else if (matchesAccelerator(e, sc.insert)) {
       e.preventDefault();
       insert();
+    } else if (matchesAccelerator(e, sc.attachFile)) {
+      e.preventDefault();
+      pickFiles();
+    } else if (matchesAccelerator(e, sc.enhance)) {
+      e.preventDefault();
+      enhance();
+    } else if (matchesAccelerator(e, sc.translate)) {
+      e.preventDefault();
+      translate();
+    } else if (matchesAccelerator(e, sc.voice)) {
+      e.preventDefault();
+      toggleVoice();
+    } else if (matchesAccelerator(e, sc.undo)) {
+      // Own stack — native undo must not also fire.
+      e.preventDefault();
+      history.undo();
+    } else if (matchesAccelerator(e, sc.redo)) {
+      e.preventDefault();
+      history.redo();
+    } else if (matchesAccelerator(e, sc.openSettings)) {
+      e.preventDefault();
+      invoke("open_settings");
     }
   };
 
-  const langLabel = (c: string) => (c === "vi" ? "VI" : "EN");
+  const langLabel = (c: string) => c.toUpperCase();
 
   return (
     <div className="flex h-screen w-screen items-start justify-center p-1.5">
@@ -336,13 +366,17 @@ export default function Popup() {
           </span>
           <div className="flex items-center gap-0.5">
             <IconButton
-              label="Settings"
+              label={`Settings (${formatAccelerator(settings.shortcuts.openSettings)})`}
               className="h-6 w-6"
               onClick={() => invoke("open_settings")}
             >
               <Settings2 size={14} />
             </IconButton>
-            <IconButton label="Close (Esc)" className="h-6 w-6" onClick={hide}>
+            <IconButton
+              label={`Close (${formatAccelerator(settings.shortcuts.close)})`}
+              className="h-6 w-6"
+              onClick={hide}
+            >
               <X size={14} />
             </IconButton>
           </div>
@@ -356,7 +390,7 @@ export default function Popup() {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          placeholder="Type here…  Enter to insert · Shift+Enter for newline · Esc to close"
+          placeholder={`Type here…  ${formatAccelerator(settings.shortcuts.insert)} to insert · Shift+Enter for newline · ${formatAccelerator(settings.shortcuts.close)} to close`}
           style={{ maxHeight: TEXTAREA_MAX }}
           className={cn(
             "min-h-[52px] w-full resize-none overflow-y-auto bg-transparent px-3.5 py-1 text-[15px] leading-relaxed",
@@ -403,11 +437,14 @@ export default function Popup() {
         {/* toolbar */}
         <div className="flex items-center justify-between border-t border-border px-2 py-1.5">
           <div className="flex items-center gap-0.5">
-            <IconButton label="Attach file / image" onClick={pickFiles}>
+            <IconButton
+              label={`Attach file / image (${formatAccelerator(settings.shortcuts.attachFile)})`}
+              onClick={pickFiles}
+            >
               <Paperclip size={16} />
             </IconButton>
             <IconButton
-              label="Enhance & fix grammar (AI)"
+              label={`Enhance & fix grammar (AI) (${formatAccelerator(settings.shortcuts.enhance)})`}
               onClick={enhance}
               active={busy}
               disabled={!text.trim() && !busy}
@@ -422,7 +459,7 @@ export default function Popup() {
               type="button"
               onClick={translate}
               disabled={!text.trim()}
-              title="Translate"
+              title={`Translate (${formatAccelerator(settings.shortcuts.translate)})`}
               className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-muted transition-colors hover:bg-accent hover:text-fg disabled:opacity-40"
             >
               {langLabel(settings.translateFrom)}
@@ -437,24 +474,34 @@ export default function Popup() {
               {langLabel(settings.translateTo)}
             </button>
             <IconButton
-              label={recording ? "Stop recording" : "Voice to text"}
+              label={`${recording ? "Stop recording" : "Voice to text"} (${formatAccelerator(settings.shortcuts.voice)})`}
               onClick={toggleVoice}
               active={recording}
               className={recording ? "text-red-500" : ""}
             >
               <Mic size={16} />
             </IconButton>
-            {undoText !== null && (
-              <IconButton label="Undo AI change" onClick={undo}>
-                <Undo2 size={16} />
-              </IconButton>
-            )}
+            <IconButton
+              label={`Undo (${formatAccelerator(settings.shortcuts.undo)})`}
+              onClick={history.undo}
+              disabled={!history.canUndo}
+            >
+              <Undo2 size={16} />
+            </IconButton>
+            <IconButton
+              label={`Redo (${formatAccelerator(settings.shortcuts.redo)})`}
+              onClick={history.redo}
+              disabled={!history.canRedo}
+            >
+              <Redo2 size={16} />
+            </IconButton>
           </div>
 
           <button
             type="button"
             onClick={insert}
             disabled={!text.trim()}
+            title={`Insert (${formatAccelerator(settings.shortcuts.insert)})`}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg transition",
               "hover:opacity-90 disabled:opacity-40",
