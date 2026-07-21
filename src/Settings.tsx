@@ -19,9 +19,15 @@ import { KeyCapture } from "@/components/KeyCapture";
 import { MicTest } from "@/components/MicTest";
 import { Switch } from "@/components/Switch";
 
-type LocalProvider = { name: string; base_url: string; models: string[]; running: boolean };
-
-const localOptionValue = (baseUrl: string, model: string) => `${baseUrl}|||${model}`;
+type LocalModel = { id: string; path: string | null; repo: string | null };
+type LocalProvider = {
+  name: string;
+  kind: "daemon" | "launcher";
+  base_url: string;
+  running: boolean;
+  can_start: boolean;
+  models: LocalModel[];
+};
 
 // Small, multilingual-friendly Ollama models worth suggesting when nothing
 // local is installed yet — not exhaustive, just a sane starting point.
@@ -60,8 +66,10 @@ export default function Settings() {
   const [localProviders, setLocalProviders] = useState<LocalProvider[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const [starting, setStarting] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // Provider being walked (step 1).
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
   const set = <K extends keyof S>(k: K, v: S[K]) =>
     setS((prev) => ({ ...prev, [k]: v }));
@@ -69,41 +77,60 @@ export default function Settings() {
   // `checkAgainst` avoids reading stale `s` from a closure captured before
   // `loadSettings()` resolves (the mount-time call needs the freshly loaded
   // settings, not the initial-render default).
+  const useModel = (baseUrl: string, model: string) =>
+    setS((prev) => ({ ...prev, aiBaseUrl: baseUrl, aiModel: model, aiKey: "" }));
+
   const scanLocal = async (autoFillIfUnconfigured: boolean, checkAgainst: S = s) => {
     setScanning(true);
     try {
       const found = await invoke<LocalProvider[]>("detect_local_ai");
       setLocalProviders(found);
       setScanned(true);
+      // Default the flow to a running provider, else the first detected one.
+      const preferred = found.find((p) => p.running) ?? found[0];
+      setSelectedProvider((prev) =>
+        prev && found.some((p) => p.name === prev) ? prev : (preferred?.name ?? null),
+      );
       const running = found.find((p) => p.running);
-      const first = running?.models[0];
+      const first = running?.models[0]?.id;
       // Only auto-pick when the user hasn't set up anything yet (still on
       // the default remote URL, no key) — never clobber an existing config.
       const unconfigured =
         checkAgainst.aiBaseUrl === DEFAULT_SETTINGS.aiBaseUrl && checkAgainst.aiKey === "";
       if (autoFillIfUnconfigured && unconfigured && running && first) {
-        setS((prev) => ({
-          ...prev,
-          aiBaseUrl: running.base_url,
-          aiModel: first,
-          aiKey: "",
-        }));
+        useModel(running.base_url, first);
       }
     } finally {
       setScanning(false);
     }
   };
 
-  const startLocal = async (name: string) => {
-    setStarting(name);
+  // Start (or restart) a provider. Launchers must boot bound to a model, so pass
+  // one; daemons ignore it. Point the config at the model once it's up.
+  const startLocal = async (p: LocalProvider, model?: LocalModel) => {
+    setBusy(p.name);
     setStartError(null);
     try {
-      await invoke<string>("start_local_ai", { name });
+      await invoke<string>("start_local_ai", { name: p.name, model: model ?? null });
+      if (model) useModel(p.base_url, model.id);
       await scanLocal(false);
     } catch (e) {
       setStartError(String(e));
     } finally {
-      setStarting(null);
+      setBusy(null);
+    }
+  };
+
+  const stopLocal = async (p: LocalProvider) => {
+    setBusy(p.name);
+    setStartError(null);
+    try {
+      await invoke<string>("stop_local_ai", { name: p.name });
+      await scanLocal(false);
+    } catch (e) {
+      setStartError(String(e));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -241,17 +268,9 @@ export default function Settings() {
             />
           </Field>
 
-          <div className="space-y-2 rounded-lg border border-border/60 p-3">
+          <div className="space-y-3 rounded-lg border border-border/60 p-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted">
-                {scanning
-                  ? "Scanning localhost for Ollama, LM Studio, llama.cpp…"
-                  : localProviders.length > 0
-                    ? `Local AI found: ${localProviders.map((p) => p.name).join(", ")}.`
-                    : scanned
-                      ? "No local AI found on this machine."
-                      : ""}
-              </span>
+              <span className="text-xs font-medium text-fg">Local AI</span>
               <button
                 type="button"
                 onClick={() => scanLocal(false)}
@@ -259,57 +278,119 @@ export default function Settings() {
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg hover:bg-accent disabled:opacity-50"
               >
                 <RefreshCw size={13} className={scanning ? "animate-spin" : ""} />
-                Rescan local
+                Rescan
               </button>
             </div>
 
-            {localProviders.some((p) => !p.running) && (
+            {scanning && (
+              <p className="text-xs text-muted">Scanning localhost for local AI…</p>
+            )}
+
+            {/* Step 1 — pick a provider */}
+            {localProviders.length > 0 && (
               <div className="space-y-1.5">
-                {localProviders
-                  .filter((p) => !p.running)
-                  .map((p) => (
-                    <div key={p.name} className="flex items-center justify-between text-xs">
-                      <span className="text-muted">
-                        {p.name} — {p.models.length} model{p.models.length === 1 ? "" : "s"}{" "}
-                        installed, not running
+                {localProviders.map((p) => {
+                  const active = p.name === selectedProvider;
+                  return (
+                    <button
+                      key={p.name}
+                      type="button"
+                      onClick={() => {
+                        setSelectedProvider(p.name);
+                        setStartError(null);
+                      }}
+                      className={cn(
+                        "flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left",
+                        active
+                          ? "border-primary bg-accent"
+                          : "border-border hover:bg-accent/50",
+                      )}
+                    >
+                      <span className="flex items-center gap-2 text-sm font-medium text-fg">
+                        <span
+                          className={cn(
+                            "h-2 w-2 rounded-full",
+                            p.running ? "bg-green-500" : "bg-muted",
+                          )}
+                        />
+                        {p.name}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => startLocal(p.name)}
-                        disabled={starting === p.name}
-                        className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-fg hover:bg-accent disabled:opacity-50"
-                      >
-                        {starting === p.name ? "Starting…" : "Start"}
-                      </button>
-                    </div>
-                  ))}
-                {startError && <span className="block text-xs text-red-500">{startError}</span>}
+                      <span className="text-xs text-muted">
+                        {p.running ? "running" : "installed"} · {p.models.length} model
+                        {p.models.length === 1 ? "" : "s"}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
 
-            {localProviders.some((p) => p.running) && (
-              <Field label="Use a detected local model">
-                <Combobox
-                  value={localOptionValue(s.aiBaseUrl, s.aiModel)}
-                  onChange={(v) => {
-                    const [baseUrl, model] = v.split("|||");
-                    set("aiBaseUrl", baseUrl);
-                    set("aiModel", model);
-                    set("aiKey", "");
-                  }}
-                  searchable
-                  placeholder="Pick a local model…"
-                  options={localProviders
-                    .filter((p) => p.running)
-                    .flatMap((p) =>
-                      p.models.map((m) => ({
-                        value: localOptionValue(p.base_url, m),
-                        label: `${p.name} — ${m}`,
-                      })),
+            {/* Step 2 — same flow for every provider: start server, then pick model. */}
+            {selectedProvider &&
+              (() => {
+                const p = localProviders.find((x) => x.name === selectedProvider);
+                if (!p) return null;
+                const options = p.models.map((m) => ({ value: m.id, label: m.id }));
+                const working = busy === p.name;
+
+                // Not running: start it. Launchers can't boot without a model, so
+                // boot the first available; the dropdown switches it afterward.
+                if (!p.running) {
+                  if (!p.can_start) {
+                    return (
+                      <p className="text-xs text-muted">Launch {p.name} yourself, then Rescan.</p>
+                    );
+                  }
+                  const bootModel = p.kind === "launcher" ? p.models[0] : undefined;
+                  return (
+                    <div className="space-y-1.5">
+                      <button
+                        type="button"
+                        onClick={() => startLocal(p, bootModel)}
+                        disabled={working || (p.kind === "launcher" && !bootModel)}
+                        className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg hover:bg-accent disabled:opacity-50"
+                      >
+                        {working ? "Starting…" : `Start ${p.name}`}
+                      </button>
+                      {startError && (
+                        <span className="block text-xs text-red-500">{startError}</span>
+                      )}
+                    </div>
+                  );
+                }
+
+                // Running: pick a model, and offer Stop. For a launcher, switching
+                // model restarts the server bound to the new one.
+                const current = p.base_url === s.aiBaseUrl ? s.aiModel : "";
+                return (
+                  <div className="space-y-2">
+                    <Field label="Model">
+                      <Combobox
+                        value={current}
+                        onChange={(id) => {
+                          const m = p.models.find((x) => x.id === id);
+                          if (p.kind === "launcher" && m) startLocal(p, m);
+                          else useModel(p.base_url, id);
+                        }}
+                        searchable
+                        placeholder="Pick a model…"
+                        options={options}
+                      />
+                    </Field>
+                    <button
+                      type="button"
+                      onClick={() => stopLocal(p)}
+                      disabled={working}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg hover:bg-accent disabled:opacity-50"
+                    >
+                      {working ? "Stopping…" : `Stop ${p.name}`}
+                    </button>
+                    {startError && (
+                      <span className="block text-xs text-red-500">{startError}</span>
                     )}
-                />
-              </Field>
-            )}
+                  </div>
+                );
+              })()}
 
             {scanned && localProviders.length === 0 && (
               <div className="space-y-1.5">

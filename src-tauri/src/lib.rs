@@ -180,10 +180,17 @@ async fn detect_local_ai() -> Vec<LocalProvider> {
     ai::detect_local().await
 }
 
-/// Start a local runtime found installed-but-not-running (Ollama, LM Studio).
+/// Start a local runtime found installed-but-not-running. Daemons (Ollama, LM
+/// Studio) ignore `model`; launchers (llama-server) are spawned bound to it.
 #[tauri::command]
-async fn start_local_ai(name: String) -> Result<String, String> {
-    ai::start_local(&name).await
+async fn start_local_ai(name: String, model: Option<ai::LocalModel>) -> Result<String, String> {
+    ai::start_local(&name, model).await
+}
+
+/// Stop a running local runtime (kills what we started; else its stop CLI).
+#[tauri::command]
+async fn stop_local_ai(name: String) -> Result<String, String> {
+    ai::stop_local(&name).await
 }
 
 /// Re-register the global hotkey (unregister everything first).
@@ -260,7 +267,8 @@ pub fn run() {
             open_settings,
             focused_window_is_helper,
             detect_local_ai,
-            start_local_ai
+            start_local_ai,
+            stop_local_ai
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
