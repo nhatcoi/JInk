@@ -1,6 +1,7 @@
 // OpenAI-compatible chat completions with streaming, surfaced to the UI via events.
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::{Mutex, OnceLock};
@@ -18,20 +19,15 @@ pub struct AiConfig {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    /// Tavily key enabling the web-search tool. Empty = no search.
+    #[serde(default)]
+    pub search_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
-}
-
-#[derive(Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    stream: bool,
-    temperature: f32,
 }
 
 /// Stream a chat completion. Emits `ai-token` per delta, then `ai-done` or `ai-error`.
@@ -54,18 +50,28 @@ async fn run(
     request_id: &str,
 ) -> anyhow::Result<()> {
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
-    let body = ChatRequest {
-        model: config.model,
-        messages,
-        stream: true,
-        temperature: 0.3,
-    };
-
     let client = reqwest::Client::new();
+
+    let mut convo: Vec<Value> = messages
+        .into_iter()
+        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .collect();
+
+    // With a search key, let the model pull live info before the final answer.
+    // Tool calls are resolved non-streaming; results append to `convo`.
+    if !config.search_key.is_empty() {
+        resolve_tools(&client, &url, &config, &mut convo).await?;
+    }
+
     let resp = client
         .post(&url)
         .bearer_auth(&config.api_key)
-        .json(&body)
+        .json(&json!({
+            "model": config.model,
+            "messages": convo,
+            "stream": true,
+            "temperature": 0.3,
+        }))
         .send()
         .await?;
 
@@ -107,6 +113,100 @@ async fn run(
 
     window.emit("ai-done", request_id)?;
     Ok(())
+}
+
+fn web_search_tool() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for current facts, definitions, or context missing from the input.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "The search query" }
+                },
+                "required": ["query"]
+            }
+        }
+    })
+}
+
+/// Run any tool calls the model requests, appending the assistant call and each
+/// tool result to `convo`, until it stops calling tools (bounded).
+async fn resolve_tools(
+    client: &reqwest::Client,
+    url: &str,
+    config: &AiConfig,
+    convo: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    for _ in 0..3 {
+        let resp = client
+            .post(url)
+            .bearer_auth(&config.api_key)
+            .json(&json!({
+                "model": config.model,
+                "messages": &convo,
+                "stream": false,
+                "temperature": 0.3,
+                "tools": [web_search_tool()],
+            }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Ok(()); // tools unsupported → fall through to a plain answer
+        }
+        let json: Value = resp.json().await?;
+        let msg = &json["choices"][0]["message"];
+        let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
+        if calls.is_empty() {
+            return Ok(());
+        }
+        convo.push(msg.clone());
+        for call in calls {
+            let id = call["id"].as_str().unwrap_or_default();
+            let query = call["function"]["arguments"]
+                .as_str()
+                .and_then(|a| serde_json::from_str::<Value>(a).ok())
+                .and_then(|v| v["query"].as_str().map(str::to_string))
+                .unwrap_or_default();
+            let result = web_search(&config.search_key, &query)
+                .await
+                .unwrap_or_else(|e| format!("Search failed: {e}"));
+            convo.push(json!({ "role": "tool", "tool_call_id": id, "content": result }));
+        }
+    }
+    Ok(())
+}
+
+/// Tavily search — returns a short digest for the model to ground its answer on.
+async fn web_search(api_key: &str, query: &str) -> anyhow::Result<String> {
+    let resp = reqwest::Client::new()
+        .post("https://api.tavily.com/search")
+        .json(&json!({
+            "api_key": api_key,
+            "query": query,
+            "max_results": 5,
+            "include_answer": true,
+        }))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {}", resp.status());
+    }
+    let json: Value = resp.json().await?;
+    let mut out = String::new();
+    if let Some(answer) = json["answer"].as_str() {
+        out.push_str(answer);
+        out.push('\n');
+    }
+    for r in json["results"].as_array().into_iter().flatten() {
+        let title = r["title"].as_str().unwrap_or_default();
+        let content = r["content"].as_str().unwrap_or_default();
+        let url = r["url"].as_str().unwrap_or_default();
+        out.push_str(&format!("- {title}: {content} ({url})\n"));
+    }
+    Ok(out)
 }
 
 /// A model a provider can serve. Daemons only need `id`; launchers also need a
