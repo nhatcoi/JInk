@@ -1,11 +1,13 @@
 // Text + inline-image injection into the previously-focused app.
 //
-// Text is split on `[#ImageN]` tokens. Literal text is typed; each token is
-// replaced by pasting that image from the clipboard, so an app like Claude Code
-// turns it into its own inline `[Image #N]` placeholder at the right position.
+// Text is split on `[#ImageN]` tokens. Each run — text or image — goes onto the
+// clipboard and is pasted, so an app like Claude Code turns each image into its
+// own inline `[Image #N]` placeholder at the right position.
 //
-// Linux: type via `xdotool type`, paste images via clipboard + `xdotool key
-// ctrl+v`. macOS / Windows: clipboard + enigo paste.
+// Clipboard paste (not simulated typing) because `xdotool type` is slow
+// char-by-char and mangles non-ASCII: Vietnamese diacritics have no keysym.
+//
+// Linux: paste via `xdotool key ctrl+v`. macOS / Windows: enigo paste.
 use std::{borrow::Cow, thread, time::Duration};
 
 enum Part {
@@ -60,41 +62,35 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
     // Give focus a moment to return to the target app after the popup hides.
     thread::sleep(Duration::from_millis(120));
 
-    let mut clipboard: Option<arboard::Clipboard> = None;
+    let mut cb = arboard::Clipboard::new().map_err(|e| format!("clipboard init: {e}"))?;
     for part in split_parts(text) {
         match part {
-            Part::Text(s) => type_text(&s)?,
-            Part::Image(n) => {
-                let Some((_, path)) = images.iter().find(|(i, _)| *i == n) else {
-                    // No image for this token — keep the marker so nothing's lost.
-                    type_text(&format!("[#Image{n}]"))?;
+            Part::Text(s) => {
+                if s.is_empty() {
                     continue;
-                };
-                let cb = clipboard
-                    .get_or_insert_with(|| arboard::Clipboard::new().expect("clipboard init"));
-                set_clipboard_image(cb, path)?;
+                }
+                cb.set_text(s).map_err(|e| format!("clipboard text: {e}"))?;
                 paste()?;
-                // Let the target consume the paste before the next keystroke.
+                thread::sleep(Duration::from_millis(80));
+            }
+            Part::Image(n) => {
+                let path = match images.iter().find(|(i, _)| *i == n) {
+                    Some((_, p)) => p,
+                    // No image for this token — keep the marker so nothing's lost.
+                    None => {
+                        cb.set_text(format!("[#Image{n}]"))
+                            .map_err(|e| format!("clipboard text: {e}"))?;
+                        paste()?;
+                        thread::sleep(Duration::from_millis(80));
+                        continue;
+                    }
+                };
+                set_clipboard_image(&mut cb, path)?;
+                paste()?;
+                // Let the target consume the image paste before the next run.
                 thread::sleep(Duration::from_millis(250));
             }
         }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn type_text(s: &str) -> Result<(), String> {
-    if s.is_empty() {
-        return Ok(());
-    }
-    // `--` stops flag parsing so text starting with '-' is safe; the text is a
-    // single process arg, so there's no shell interpolation.
-    let status = std::process::Command::new("xdotool")
-        .args(["type", "--clearmodifiers", "--delay", "4", "--", s])
-        .status()
-        .map_err(|e| format!("xdotool not available: {e}"))?;
-    if !status.success() {
-        return Err("xdotool type failed".into());
     }
     Ok(())
 }
