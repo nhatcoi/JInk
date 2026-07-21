@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { readImage } from "@tauri-apps/plugin-clipboard-manager";
 import {
   ArrowLeftRight,
   BookOpen,
@@ -317,6 +318,37 @@ export default function Popup() {
     }
   };
 
+  // WebKitGTK often omits clipboard images from the JS paste event — read the
+  // OS clipboard directly and add it as a data-URL attachment.
+  const pasteNativeImage = async () => {
+    try {
+      const img = await readImage();
+      const { width, height } = await img.size();
+      const rgba = await img.rgba();
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.putImageData(
+        new ImageData(new Uint8ClampedArray(rgba), width, height),
+        0,
+        0,
+      );
+      setAttachments((a) => [
+        ...a,
+        {
+          id: crypto.randomUUID(),
+          name: "pasted-image.png",
+          kind: "image",
+          url: canvas.toDataURL("image/png"),
+        },
+      ]);
+    } catch {
+      // no image on the clipboard — nothing to paste
+    }
+  };
+
   const onPaste = (e: React.ClipboardEvent) => {
     const imgs = Array.from(e.clipboardData.items)
       .filter((i) => i.type.startsWith("image/"))
@@ -325,6 +357,10 @@ export default function Popup() {
     if (imgs.length) {
       e.preventDefault();
       addFiles(imgs);
+      return;
+    }
+    if (!e.clipboardData.getData("text/plain")) {
+      pasteNativeImage();
     }
   };
 
