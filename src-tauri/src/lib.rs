@@ -176,9 +176,10 @@ async fn ai_stream(
     window: Window,
     config: AiConfig,
     messages: Vec<ChatMessage>,
+    images: Option<Vec<String>>,
     request_id: String,
 ) {
-    ai::stream_chat(window, config, messages, request_id).await;
+    ai::stream_chat(window, config, messages, images.unwrap_or_default(), request_id).await;
 }
 
 /// Scan well-known local ports (Ollama, LM Studio, llama.cpp server, …) for a

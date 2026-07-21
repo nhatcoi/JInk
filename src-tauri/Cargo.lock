@@ -2020,6 +2020,7 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "arboard",
+ "base64 0.22.1",
  "enigo",
  "futures-util",
  "image",

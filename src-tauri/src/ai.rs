@@ -1,4 +1,5 @@
 // OpenAI-compatible chat completions with streaming, surfaced to the UI via events.
+use base64::Engine;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -36,9 +37,10 @@ pub async fn stream_chat(
     window: Window,
     config: AiConfig,
     messages: Vec<ChatMessage>,
+    images: Vec<String>,
     request_id: String,
 ) {
-    if let Err(e) = run(&window, config, messages, &request_id).await {
+    if let Err(e) = run(&window, config, messages, images, &request_id).await {
         let _ = window.emit("ai-error", (request_id, e.to_string()));
     }
 }
@@ -47,6 +49,7 @@ async fn run(
     window: &Window,
     config: AiConfig,
     messages: Vec<ChatMessage>,
+    images: Vec<String>,
     request_id: &str,
 ) -> anyhow::Result<()> {
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
@@ -56,6 +59,12 @@ async fn run(
         .into_iter()
         .map(|m| json!({ "role": m.role, "content": m.content }))
         .collect();
+
+    // Attach images (as base64 data URLs) to the last user turn, turning its
+    // content into an OpenAI multimodal array. Needs a vision-capable model.
+    if !images.is_empty() {
+        attach_images(&mut convo, &images);
+    }
 
     // With a search key, let the model pull live info before the final answer.
     // Tool calls are resolved non-streaming; results append to `convo`.
@@ -113,6 +122,36 @@ async fn run(
 
     window.emit("ai-done", request_id)?;
     Ok(())
+}
+
+/// Rewrite the last user message's content into a multimodal array carrying the
+/// original text plus each image as a base64 `image_url`. Unreadable files are
+/// skipped. No user turn → images are dropped (nothing to anchor them to).
+fn attach_images(convo: &mut [Value], paths: &[String]) {
+    let Some(msg) = convo.iter_mut().rev().find(|m| m["role"] == "user") else {
+        return;
+    };
+    let text = msg["content"].as_str().unwrap_or_default().to_string();
+    let mut parts = vec![json!({ "type": "text", "text": text })];
+    for path in paths {
+        if let Some(url) = image_data_url(path) {
+            parts.push(json!({ "type": "image_url", "image_url": { "url": url } }));
+        }
+    }
+    msg["content"] = Value::Array(parts);
+}
+
+/// Read an image file into a `data:<mime>;base64,...` URL, or `None` if missing.
+fn image_data_url(path: &str) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let mime = match path.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Some(format!("data:{mime};base64,{b64}"))
 }
 
 fn web_search_tool() -> Value {
