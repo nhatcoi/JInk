@@ -51,6 +51,7 @@ export async function runAiStream(
       base_url: settings.aiBaseUrl,
       model: settings.aiModel,
       api_key: settings.aiKey,
+      search_key: settings.searchKey,
     },
     messages,
     requestId,
@@ -76,6 +77,17 @@ export function enhancePrompt(text: string): ChatMessage[] {
       role: "system",
       content:
         "You are a writing assistant. Improve the user's text: fix grammar, spelling and clarity while preserving meaning, tone and language. Return ONLY the improved text, no quotes, no explanation.",
+    },
+    { role: "user", content: text },
+  ];
+}
+
+export function explainPrompt(text: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "You are a concise explainer. Explain the meaning of the word or sentence the user sends, in the same language it's written in. Be brief: 1-3 short sentences, no preamble, no quotes. If it's a term or fact needing current info, use web search when available.",
     },
     { role: "user", content: text },
   ];

@@ -267,6 +267,14 @@ export default function Settings() {
               onChange={(e) => set("aiKey", e.target.value)}
             />
           </Field>
+          <Field label="Search API Key" hint="Tavily key — enables web search for Explain (tavily.com)">
+            <input
+              type="password"
+              className={inputCls}
+              value={s.searchKey}
+              onChange={(e) => set("searchKey", e.target.value)}
+            />
+          </Field>
 
           <div className="space-y-3 rounded-lg border border-border/60 p-3">
             <div className="flex items-center justify-between">

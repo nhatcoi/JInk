@@ -5,6 +5,8 @@ export type Settings = {
   aiBaseUrl: string;
   aiModel: string;
   aiKey: string;
+  /** Tavily API key — enables the web-search tool for Explain. Empty = off. */
+  searchKey: string;
   /** Global hotkey that shows/hides the popup — works even when unfocused. */
   hotkey: string;
   width: number;
@@ -22,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   aiBaseUrl: "",
   aiModel: "",
   aiKey: "",
+  searchKey: "",
   hotkey: "Alt+Space",
   width: 700,
   height: 150,

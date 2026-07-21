@@ -5,6 +5,7 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeftRight,
+  BookOpen,
   CornerDownLeft,
   Loader2,
   Mic,
@@ -22,7 +23,13 @@ import {
   loadSettings,
   type Settings,
 } from "@/lib/settings";
-import { enhancePrompt, friendlyAiError, runAiStream, translatePrompt } from "@/lib/ai";
+import {
+  enhancePrompt,
+  explainPrompt,
+  friendlyAiError,
+  runAiStream,
+  translatePrompt,
+} from "@/lib/ai";
 import { startRecording, transcribe } from "@/lib/voice";
 import { formatAccelerator, matchesAccelerator } from "@/lib/shortcuts";
 import { useUndo } from "@/lib/useUndo";
@@ -214,6 +221,7 @@ export default function Popup() {
   );
 
   const enhance = () => text.trim() && streamInto(enhancePrompt(text.trim()));
+  const explain = () => text.trim() && streamInto(explainPrompt(text.trim()));
   const translate = () =>
     text.trim() &&
     streamInto(
@@ -341,6 +349,9 @@ export default function Popup() {
     } else if (matchesAccelerator(e, sc.translate)) {
       e.preventDefault();
       translate();
+    } else if (matchesAccelerator(e, sc.explain)) {
+      e.preventDefault();
+      explain();
     } else if (matchesAccelerator(e, sc.voice)) {
       e.preventDefault();
       toggleVoice();
@@ -495,6 +506,13 @@ export default function Popup() {
               />
               {langLabel(settings.translateTo)}
             </button>
+            <IconButton
+              label={`Explain (AI) (${formatAccelerator(settings.shortcuts.explain)})`}
+              onClick={explain}
+              disabled={!text.trim() && !busy}
+            >
+              <BookOpen size={16} />
+            </IconButton>
             <IconButton
               label={`${recording ? "Stop recording" : "Voice to text"} (${formatAccelerator(settings.shortcuts.voice)})`}
               onClick={toggleVoice}
