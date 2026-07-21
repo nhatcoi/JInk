@@ -297,24 +297,36 @@ export default function Popup() {
     }
   };
 
-  // Add pasted files as attachments; images get a data-URL preview.
+  // Add an image attachment with a preview, then persist its bytes to a temp
+  // file so `insert` can hand the target app a real path (not just a preview).
+  const attachImage = async (bytes: Uint8Array, previewUrl: string, name: string) => {
+    const id = crypto.randomUUID();
+    setAttachments((a) => [...a, { id, name, kind: "image", url: previewUrl }]);
+    try {
+      const path = await invoke<string>("save_temp_image", {
+        bytes: Array.from(bytes),
+        ext: "png",
+      });
+      setAttachments((a) => a.map((x) => (x.id === id ? { ...x, path } : x)));
+    } catch (e) {
+      setStatusIsAiError(false);
+      setStatus(String(e));
+    }
+  };
+
+  // Add pasted files as attachments; images get a preview + temp path.
   const addFiles = (files: File[]) => {
     for (const f of files) {
-      const isImg = f.type.startsWith("image/");
-      const att: Attachment = {
-        id: crypto.randomUUID(),
-        name: f.name,
-        kind: isImg ? "image" : "file",
-      };
-      if (isImg) {
-        const r = new FileReader();
-        r.onload = () =>
-          setAttachments((a) =>
-            a.map((x) => (x.id === att.id ? { ...x, url: String(r.result) } : x)),
-          );
-        r.readAsDataURL(f);
+      if (f.type.startsWith("image/")) {
+        f.arrayBuffer().then((buf) =>
+          attachImage(new Uint8Array(buf), URL.createObjectURL(f), f.name),
+        );
+      } else {
+        setAttachments((a) => [
+          ...a,
+          { id: crypto.randomUUID(), name: f.name, kind: "file" },
+        ]);
       }
-      setAttachments((a) => [...a, att]);
     }
   };
 
@@ -335,15 +347,12 @@ export default function Popup() {
         0,
         0,
       );
-      setAttachments((a) => [
-        ...a,
-        {
-          id: crypto.randomUUID(),
-          name: "pasted-image.png",
-          kind: "image",
-          url: canvas.toDataURL("image/png"),
-        },
-      ]);
+      const blob = await new Promise<Blob | null>((res) =>
+        canvas.toBlob(res, "image/png"),
+      );
+      if (!blob) return;
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      attachImage(bytes, URL.createObjectURL(blob), "pasted-image.png");
     } catch {
       // no image on the clipboard — nothing to paste
     }

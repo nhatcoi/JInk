@@ -193,6 +193,23 @@ async fn stop_local_ai(name: String) -> Result<String, String> {
     ai::stop_local(&name).await
 }
 
+/// Write pasted image bytes to a temp file, returning its path so it can be
+/// injected into the target app (which accepts an image by path).
+#[tauri::command]
+fn save_temp_image(bytes: Vec<u8>, ext: String) -> Result<String, String> {
+    use std::io::Write;
+    let ext = if ext.is_empty() { "png" } else { &ext };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("jink-{nanos}.{ext}"));
+    std::fs::File::create(&path)
+        .and_then(|mut f| f.write_all(&bytes))
+        .map_err(|e| format!("Couldn't save image: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// Re-register the global hotkey (unregister everything first).
 #[tauri::command]
 fn set_hotkey(app: AppHandle, accelerator: String) -> Result<(), String> {
@@ -268,7 +285,8 @@ pub fn run() {
             focused_window_is_helper,
             detect_local_ai,
             start_local_ai,
-            stop_local_ai
+            stop_local_ai,
+            save_temp_image
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
