@@ -14,6 +14,7 @@ import {
   Redo2,
   Settings2,
   Sparkles,
+  Trash2,
   Undo2,
   X,
 } from "lucide-react";
@@ -207,7 +208,7 @@ export default function Popup() {
 
   // --- AI (enhance / translate): stream tokens into the editor ---
   const streamInto = useCallback(
-    async (messages: Parameters<typeof runAiStream>[1]) => {
+    async (messages: Parameters<typeof runAiStream>[1], images: string[] = []) => {
       if (busy) {
         cancelRef.current?.();
         setBusy(false);
@@ -243,13 +244,22 @@ export default function Popup() {
           setStatus(friendlyAiError(e));
           setStatusIsAiError(true);
         },
-      });
+      }, images);
     },
     [busy, settings, text, history],
   );
 
+  const imagePaths = () =>
+    attachments
+      .filter((a) => a.kind === "image" && a.path)
+      .map((a) => a.path as string);
+
   const enhance = () => text.trim() && streamInto(enhancePrompt(text.trim()));
-  const explain = () => text.trim() && streamInto(explainPrompt(text.trim()));
+  const explain = () => {
+    const imgs = imagePaths();
+    if (!text.trim() && imgs.length === 0) return;
+    streamInto(explainPrompt(text.trim(), settings.mainLanguage), imgs);
+  };
   const translate = () =>
     text.trim() &&
     streamInto(
@@ -433,6 +443,9 @@ export default function Popup() {
     } else if (matchesAccelerator(e, sc.voice)) {
       e.preventDefault();
       toggleVoice();
+    } else if (matchesAccelerator(e, sc.clear)) {
+      e.preventDefault();
+      reset();
     } else if (matchesAccelerator(e, sc.undo)) {
       // Own stack — native undo must not also fire.
       e.preventDefault();
@@ -617,6 +630,13 @@ export default function Popup() {
               disabled={!history.canRedo}
             >
               <Redo2 size={16} />
+            </IconButton>
+            <IconButton
+              label={`Clear all (${formatAccelerator(settings.shortcuts.clear)})`}
+              onClick={reset}
+              disabled={!text.trim() && attachments.length === 0}
+            >
+              <Trash2 size={16} />
             </IconButton>
           </div>
 

@@ -15,6 +15,8 @@ export type Settings = {
   shortcuts: Record<ActionId, string>;
   translateFrom: string;
   translateTo: string;
+  /** Language the AI answers Explain in; falls back to English if unsupported. */
+  mainLanguage: string;
   hideOnBlur: boolean;
   /** MediaDeviceInfo.deviceId of the mic to record with — "" means system default. */
   micDeviceId: string;
@@ -31,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shortcuts: DEFAULT_SHORTCUTS,
   translateFrom: "auto",
   translateTo: "en",
+  mainLanguage: "en",
   hideOnBlur: true,
   micDeviceId: "",
 };

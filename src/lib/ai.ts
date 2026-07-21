@@ -16,6 +16,7 @@ export async function runAiStream(
   settings: Settings,
   messages: ChatMessage[],
   handlers: StreamHandlers,
+  images: string[] = [],
 ): Promise<() => void> {
   const requestId = crypto.randomUUID();
   const unlisten: UnlistenFn[] = [];
@@ -54,6 +55,7 @@ export async function runAiStream(
       search_key: settings.searchKey,
     },
     messages,
+    images,
     requestId,
   }).catch((err) => {
     handlers.onError(String(err));
@@ -82,14 +84,13 @@ export function enhancePrompt(text: string): ChatMessage[] {
   ];
 }
 
-export function explainPrompt(text: string): ChatMessage[] {
+export function explainPrompt(text: string, lang: string): ChatMessage[] {
   return [
     {
       role: "system",
-      content:
-        "You are a concise explainer. Explain the meaning of the word or sentence the user sends, in the same language it's written in. Be brief: 1-3 short sentences, no preamble, no quotes. If it's a term or fact needing current info, use web search when available.",
+      content: `You are a concise explainer. Explain the meaning of the word, sentence, or attached image the user sends. Answer in ${languageName(lang)} if you are fluent in it; otherwise answer in English. Be brief: 1-3 short sentences, no preamble, no quotes. If it's a term or fact needing current info, use web search when available.`,
     },
-    { role: "user", content: text },
+    { role: "user", content: text || "Explain the attached image." },
   ];
 }
 

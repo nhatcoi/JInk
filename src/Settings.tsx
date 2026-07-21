@@ -456,6 +456,23 @@ export default function Settings() {
 
         <section className="space-y-4">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+            AI language
+          </h2>
+          <Field
+            label="Main language"
+            hint="Explain answers in this language; falls back to English if the model doesn't support it."
+          >
+            <Combobox
+              value={s.mainLanguage}
+              onChange={(v) => set("mainLanguage", v)}
+              searchable
+              options={LANGUAGES.map((l) => ({ value: l.code, label: l.label }))}
+            />
+          </Field>
+        </section>
+
+        <section className="space-y-4">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
             Voice
           </h2>
           <MicTest deviceId={s.micDeviceId} onDeviceChange={(v) => set("micDeviceId", v)} />

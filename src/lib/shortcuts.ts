@@ -12,6 +12,7 @@ export type ActionId =
   | "translate"
   | "explain"
   | "voice"
+  | "clear"
   | "undo"
   | "redo"
   | "openSettings";
@@ -24,6 +25,7 @@ export const ACTION_ORDER: ActionId[] = [
   "translate",
   "explain",
   "voice",
+  "clear",
   "undo",
   "redo",
   "openSettings",
@@ -37,6 +39,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   translate: "Translate",
   explain: "AI explain",
   voice: "Voice to text",
+  clear: "Clear all",
   undo: "Undo",
   redo: "Redo",
   openSettings: "Open settings",
@@ -50,6 +53,7 @@ export const DEFAULT_SHORTCUTS: Record<ActionId, string> = {
   translate: "CmdOrCtrl+KeyT",
   explain: "CmdOrCtrl+KeyD",
   voice: "CmdOrCtrl+KeyM",
+  clear: "CmdOrCtrl+Backspace",
   undo: "CmdOrCtrl+KeyZ",
   redo: "CmdOrCtrl+Shift+KeyZ",
   openSettings: "CmdOrCtrl+Backquote",
