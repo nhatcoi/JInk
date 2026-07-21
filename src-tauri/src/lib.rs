@@ -153,11 +153,19 @@ fn active_window_name() -> Option<String> {
     None
 }
 
-/// Hide the popup (returning focus to the target app), then paste `text` there.
+#[derive(serde::Deserialize)]
+struct ImagePart {
+    index: u32,
+    path: String,
+}
+
+/// Hide the popup (returning focus to the target app), then inject `text` there.
+/// `[#ImageN]` tokens in `text` are replaced by pasting the matching image.
 #[tauri::command]
-async fn inject_text(window: Window, text: String) -> Result<(), String> {
+async fn inject_text(window: Window, text: String, images: Vec<ImagePart>) -> Result<(), String> {
     hide_popup(&window);
-    tokio::task::spawn_blocking(move || inject::inject_text(&text))
+    let images: Vec<(u32, String)> = images.into_iter().map(|i| (i.index, i.path)).collect();
+    tokio::task::spawn_blocking(move || inject::inject_text(&text, &images))
         .await
         .map_err(|e| e.to_string())?
 }

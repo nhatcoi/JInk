@@ -42,6 +42,8 @@ type Attachment = {
   url?: string;
   /** Absolute filesystem path (present when picked via the native dialog). */
   path?: string;
+  /** For images: the N in its `[#ImageN]` text token, placing it inline. */
+  index?: number;
 };
 
 const basename = (p: string) => p.split(/[\\/]/).pop() || p;
@@ -72,6 +74,8 @@ export default function Popup() {
   const streamBaseRef = useRef("");
   // True while our own file dialog is open — its blur shouldn't hide us.
   const suppressBlurRef = useRef(false);
+  // Monotonic image counter for `[#ImageN]` tokens; reset per compose.
+  const imageSeqRef = useRef(0);
 
   const history = useUndo(text, setText, taRef);
 
@@ -160,23 +164,46 @@ export default function Popup() {
     setAttachments([]);
     setStatus(null);
     setStatusIsAiError(false);
+    imageSeqRef.current = 0;
     history.clear("");
   }, [history]);
 
   const insert = useCallback(async () => {
-    // Append picked file paths so the target app receives them.
-    const paths = attachments.map((a) => a.path).filter(Boolean) as string[];
-    let t = text.trim();
-    if (paths.length) t = (t ? t + "\n" : "") + paths.join("\n");
-    if (!t) return;
+    // Images ride inline via their `[#ImageN]` tokens; non-image files append
+    // their paths as text lines.
+    const files = attachments
+      .filter((a) => a.kind === "file" && a.path)
+      .map((a) => a.path as string);
+    let t = text;
+    if (files.length) t = (t.trim() ? t + "\n" : "") + files.join("\n");
+    const images = attachments
+      .filter((a) => a.kind === "image" && a.path && a.index != null)
+      .map((a) => ({ index: a.index as number, path: a.path as string }));
+    if (!t.trim() && images.length === 0) return;
     try {
-      await invoke("inject_text", { text: t });
+      await invoke("inject_text", { text: t, images });
       reset();
     } catch (e) {
       setStatusIsAiError(false);
       setStatus(String(e));
     }
   }, [text, attachments, reset]);
+
+  // Insert an image's `[#ImageN]` token at the caret, keeping the caret after it.
+  const insertToken = (token: string) => {
+    const ta = taRef.current;
+    const at = ta ? ta.selectionStart : text.length;
+    setText((prev) => {
+      const pos = Math.min(at, prev.length);
+      return prev.slice(0, pos) + token + prev.slice(pos);
+    });
+    requestAnimationFrame(() => {
+      if (!ta) return;
+      const pos = at + token.length;
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+    });
+  };
 
   // --- AI (enhance / translate): stream tokens into the editor ---
   const streamInto = useCallback(
@@ -277,16 +304,20 @@ export default function Popup() {
     try {
       const sel = await openDialog({ multiple: true });
       const paths = sel == null ? [] : Array.isArray(sel) ? sel : [sel];
-      if (paths.length) {
-        setAttachments((a) => [
-          ...a,
-          ...paths.map((p) => ({
-            id: crypto.randomUUID(),
-            name: basename(p),
-            kind: isImagePath(p) ? ("image" as const) : ("file" as const),
-            path: p,
-          })),
-        ]);
+      for (const p of paths) {
+        if (isImagePath(p)) {
+          const index = ++imageSeqRef.current;
+          setAttachments((a) => [
+            ...a,
+            { id: crypto.randomUUID(), name: basename(p), kind: "image", path: p, index },
+          ]);
+          insertToken(`[#Image${index}]`);
+        } else {
+          setAttachments((a) => [
+            ...a,
+            { id: crypto.randomUUID(), name: basename(p), kind: "file", path: p },
+          ]);
+        }
       }
     } catch (e) {
       setStatusIsAiError(false);
@@ -301,7 +332,9 @@ export default function Popup() {
   // file so `insert` can hand the target app a real path (not just a preview).
   const attachImage = async (bytes: Uint8Array, previewUrl: string, name: string) => {
     const id = crypto.randomUUID();
-    setAttachments((a) => [...a, { id, name, kind: "image", url: previewUrl }]);
+    const index = ++imageSeqRef.current;
+    setAttachments((a) => [...a, { id, name, kind: "image", url: previewUrl, index }]);
+    insertToken(`[#Image${index}]`);
     try {
       const path = await invoke<string>("save_temp_image", {
         bytes: Array.from(bytes),
@@ -484,11 +517,16 @@ export default function Popup() {
                 ) : (
                   <Paperclip size={12} />
                 )}
-                <span className="max-w-[120px] truncate">{a.name}</span>
+                <span className="max-w-[120px] truncate">
+                  {a.kind === "image" && a.index != null ? `#Image${a.index}` : a.name}
+                </span>
                 <button
-                  onClick={() =>
-                    setAttachments((x) => x.filter((y) => y.id !== a.id))
-                  }
+                  onClick={() => {
+                    if (a.kind === "image" && a.index != null) {
+                      setText((t) => t.replace(`[#Image${a.index}]`, ""));
+                    }
+                    setAttachments((x) => x.filter((y) => y.id !== a.id));
+                  }}
                   className="text-muted hover:text-fg"
                 >
                   <X size={12} />
