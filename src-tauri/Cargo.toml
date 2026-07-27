@@ -1,6 +1,6 @@
 [package]
 name = "jink"
-version = "0.1.2"
+version = "0.1.3"
 description = "Quick input popup with translate, AI enhance and voice"
 authors = ["nhatcoi"]
 edition = "2021"
