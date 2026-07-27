@@ -10,6 +10,7 @@ export type ActionId =
   | "attachFile"
   | "enhance"
   | "translate"
+  | "translateReverse"
   | "explain"
   | "voice"
   | "clear"
@@ -23,6 +24,7 @@ export const ACTION_ORDER: ActionId[] = [
   "attachFile",
   "enhance",
   "translate",
+  "translateReverse",
   "explain",
   "voice",
   "clear",
@@ -36,7 +38,8 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   close: "Close popup",
   attachFile: "Attach file / image",
   enhance: "AI enhance",
-  translate: "Translate",
+  translate: "Translate (Lang 1 → Lang 2)",
+  translateReverse: "Translate reverse (Lang 2 → Lang 1)",
   explain: "AI explain",
   voice: "Voice to text",
   clear: "Clear all",
@@ -51,6 +54,7 @@ export const DEFAULT_SHORTCUTS: Record<ActionId, string> = {
   attachFile: "CmdOrCtrl+KeyO",
   enhance: "CmdOrCtrl+KeyE",
   translate: "CmdOrCtrl+KeyT",
+  translateReverse: "CmdOrCtrl+Shift+KeyT",
   explain: "CmdOrCtrl+KeyD",
   voice: "CmdOrCtrl+KeyM",
   clear: "CmdOrCtrl+Backspace",

@@ -265,6 +265,13 @@ export default function Popup() {
     streamInto(
       translatePrompt(text.trim(), settings.translateFrom, settings.translateTo),
     );
+  const translateReverse = () => {
+    // "auto" only makes sense as a source — can't translate into it.
+    if (!text.trim() || settings.translateFrom === "auto") return;
+    streamInto(
+      translatePrompt(text.trim(), settings.translateTo, settings.translateFrom),
+    );
+  };
 
   const swapLang = () => {
     // "auto" only makes sense as a source — swapping it into "to" is meaningless.
@@ -434,6 +441,9 @@ export default function Popup() {
     } else if (matchesAccelerator(e, sc.enhance)) {
       e.preventDefault();
       enhance();
+    } else if (matchesAccelerator(e, sc.translateReverse)) {
+      e.preventDefault();
+      translateReverse();
     } else if (matchesAccelerator(e, sc.translate)) {
       e.preventDefault();
       translate();
