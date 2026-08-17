@@ -4,10 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Check, FileJson, RefreshCw, RotateCcw, Undo2 } from "lucide-react";
+import { Check, FileJson, History, RefreshCw, RotateCcw, Undo2, X } from "lucide-react";
 import {
   DEFAULT_SETTINGS,
   loadSettings,
+  recordAiHistory,
   saveSettings,
   type Settings as S,
 } from "@/lib/settings";
@@ -159,14 +160,35 @@ export default function Settings() {
   }, []);
 
   const save = async () => {
-    await saveSettings(s);
+    const next: S = {
+      ...s,
+      aiHistory: recordAiHistory(s.aiHistory, {
+        baseUrl: s.aiBaseUrl,
+        model: s.aiModel,
+        key: s.aiKey,
+      }),
+    };
+    await saveSettings(next);
     await invoke("set_hotkey", { accelerator: s.hotkey }).catch(() => {});
-    setSavedSnapshot(s);
+    setS(next);
+    setSavedSnapshot(next);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };
 
-  const resetDefaults = () => setS(DEFAULT_SETTINGS);
+  const useHistory = (h: S["aiHistory"][number]) =>
+    setS((prev) => ({ ...prev, aiBaseUrl: h.baseUrl, aiModel: h.model, aiKey: h.key }));
+
+  const removeHistory = (h: S["aiHistory"][number]) =>
+    setS((prev) => ({
+      ...prev,
+      aiHistory: prev.aiHistory.filter(
+        (x) => !(x.baseUrl === h.baseUrl && x.model === h.model),
+      ),
+    }));
+
+  const resetDefaults = () =>
+    setS((prev) => ({ ...DEFAULT_SETTINGS, aiHistory: prev.aiHistory }));
   const undoChanges = () => setS(savedSnapshot);
   const dirty = JSON.stringify(s) !== JSON.stringify(savedSnapshot);
 
@@ -267,6 +289,46 @@ export default function Settings() {
               onChange={(e) => set("aiKey", e.target.value)}
             />
           </Field>
+          {s.aiHistory.length > 0 && (
+            <div className="space-y-1.5">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-muted">
+                <History size={13} />
+                Recent AI configs
+              </span>
+              <div className="space-y-1">
+                {s.aiHistory.map((h) => {
+                  const active = h.baseUrl === s.aiBaseUrl && h.model === s.aiModel;
+                  return (
+                    <div
+                      key={`${h.baseUrl}::${h.model}`}
+                      className={cn(
+                        "flex items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-left",
+                        active ? "border-primary bg-accent" : "border-border hover:bg-accent/50",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => useHistory(h)}
+                        className="min-w-0 flex-1 truncate text-left"
+                      >
+                        <span className="text-sm font-medium text-fg">{h.model}</span>
+                        <span className="ml-2 text-xs text-muted">{h.baseUrl}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeHistory(h)}
+                        title="Remove from history"
+                        className="shrink-0 rounded p-1 text-muted hover:bg-accent hover:text-fg"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <Field label="Search API Key" hint="Tavily key — enables web search for Explain (tavily.com)">
             <input
               type="password"
