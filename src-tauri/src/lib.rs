@@ -12,8 +12,9 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 const POPUP: &str = "popup";
 const SETTINGS: &str = "settings";
 
-/// Show the popup at the cursor and focus it.
-fn show_popup(app: &AppHandle) {
+/// Show the popup at the cursor and focus it. `selection` (X11 PRIMARY, if
+/// any) is forwarded to the frontend to prefill an empty editor.
+fn show_popup(app: &AppHandle, selection: Option<String>) {
     let Some(win) = app.get_webview_window(POPUP) else {
         return;
     };
@@ -21,7 +22,7 @@ fn show_popup(app: &AppHandle) {
     let _ = win.show();
     let _ = win.unminimize();
     let _ = win.set_focus();
-    let _ = win.emit("popup-shown", ());
+    let _ = win.emit("popup-shown", selection);
 
     // KWin's focus-stealing prevention rejects set_focus() on a re-shown window
     // (works only on first map). Re-assert focus off-thread; on Linux activate
@@ -153,6 +154,22 @@ fn active_window_name() -> Option<String> {
     None
 }
 
+/// X11 PRIMARY selection — set automatically by the source app on text
+/// select, no explicit copy needed.
+#[cfg(target_os = "linux")]
+fn read_primary_selection() -> Option<String> {
+    use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind};
+    let mut cb = Clipboard::new().ok()?;
+    let text = cb.get().clipboard(LinuxClipboardKind::Primary).text().ok()?;
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_primary_selection() -> Option<String> {
+    None
+}
+
 #[derive(serde::Deserialize)]
 struct ImagePart {
     index: u32,
@@ -280,7 +297,7 @@ pub fn run() {
                                 return;
                             }
                         }
-                        show_popup(app);
+                        show_popup(app, read_primary_selection());
                     }
                 })
                 .build(),
@@ -326,7 +343,7 @@ pub fn run() {
                 .menu(&menu)
                 .tooltip("JInk")
                 .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "open" => show_popup(app),
+                    "open" => show_popup(app, read_primary_selection()),
                     "settings" => {
                         let _ = open_settings(app.clone());
                     }

@@ -109,10 +109,17 @@ export default function Popup() {
   // On show, reload settings (Settings window edits them out-of-process) and
   // focus the editor — retry to beat the WM focus race.
   useEffect(() => {
-    const un = listen("popup-shown", () => {
+    const un = listen<string | null>("popup-shown", (e) => {
       loadSettings().then(setSettings);
       setStatus(null);
       setStatusIsAiError(false);
+      // A fresh selection always wins — replace whatever's left over, and drop
+      // attachments with it so no `[#ImageN]` chip outlives its token.
+      if (e.payload) {
+        setText(e.payload);
+        setAttachments([]);
+        imageSeqRef.current = 0;
+      }
       autosize();
       [0, 60, 150, 250].forEach((d) => setTimeout(focusEditor, d));
     });
