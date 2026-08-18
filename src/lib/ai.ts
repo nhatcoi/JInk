@@ -65,6 +65,16 @@ export async function runAiStream(
   return cleanup;
 }
 
+const THINK_TAG_RE = /<think>[\s\S]*?<\/think>/gi;
+
+/** Strip reasoning-model noise (e.g. leaked <think>...</think>) from AI output. Also hides an unclosed trailing <think> while it's still streaming in. */
+export function stripThinkTags(text: string): string {
+  let out = text.replace(THINK_TAG_RE, "");
+  const openIdx = out.search(/<think>/i);
+  if (openIdx !== -1) out = out.slice(0, openIdx);
+  return out.trimStart();
+}
+
 /** Turn a raw reqwest/network error into something a user can act on. */
 export function friendlyAiError(raw: string): string {
   if (/error sending request|tcp connect|connection refused|dns error/i.test(raw)) {

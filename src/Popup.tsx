@@ -30,6 +30,7 @@ import {
   explainPrompt,
   friendlyAiError,
   runAiStream,
+  stripThinkTags,
   translatePrompt,
 } from "@/lib/ai";
 import { startRecording, transcribe } from "@/lib/voice";
@@ -238,11 +239,11 @@ export default function Popup() {
       cancelRef.current = await runAiStream(settings, messages, {
         onToken: (tk) => {
           acc += tk;
-          setText(acc);
+          setText(stripThinkTags(acc));
         },
         onDone: () => {
           setBusy(false);
-          history.resumeWith(before, acc);
+          history.resumeWith(before, stripThinkTags(acc));
         },
         onError: (e) => {
           setBusy(false);
