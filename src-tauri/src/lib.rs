@@ -244,8 +244,7 @@ fn set_hotkey(app: AppHandle, accelerator: String) -> Result<(), String> {
     gs.register(accelerator.as_str()).map_err(|e| e.to_string())
 }
 
-/// Build the settings window hidden. A webview costs ~a second to create, so
-/// it's built once at startup and reused — closing it only hides it.
+/// Build the settings window hidden; open_settings shows it.
 fn build_settings_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     let win = tauri::WebviewWindowBuilder::new(
         app,
@@ -266,7 +265,7 @@ fn build_settings_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
 /// Open (or focus) the settings window.
 #[tauri::command]
 fn open_settings(app: AppHandle) -> Result<(), String> {
-    // Prewarmed in setup(); rebuild only if that failed.
+    // Built on demand and destroyed on close, so its webview doesn't sit in RAM.
     let win = match app.get_webview_window(SETTINGS) {
         Some(w) => w,
         None => build_settings_window(&app)?,
@@ -320,11 +319,6 @@ pub fn run() {
                 allow_media_permissions(&win);
             }
 
-            // Prewarm the settings webview so the first open is instant.
-            if let Err(e) = build_settings_window(app.handle()) {
-                eprintln!("settings window prewarm failed: {e}");
-            }
-
             // Default hotkey; the frontend re-registers from settings.
             // (Alt+Space may collide with KDE KRunner — free it in KDE first.)
             let gs = app.global_shortcut();
@@ -353,16 +347,6 @@ pub fn run() {
                 .build(app)?;
 
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            // Keep the settings webview alive — a destroy means the next open
-            // pays for a full rebuild.
-            if window.label() == SETTINGS {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
