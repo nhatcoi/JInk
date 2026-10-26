@@ -10,10 +10,11 @@ Tauri 2 + React quick-input popup. Global hotkey → popup at cursor → type/AI
 
 ## Text injection (`src-tauri/src/inject.rs`)
 
-- **Linux**: `xdotool type --clearmodifiers --delay 4 -- <text>` — types chars directly, no clipboard touch. X11-only, no Wayland support (no ydotool/wtype fallback yet). Avoids Ctrl+V vs Ctrl+Shift+V ambiguity that embedded terminals (host window class) can't be detected for.
-- **macOS/Windows**: clipboard set (`arboard`) + simulated paste (`enigo`: Cmd+V on macOS, Ctrl+V on Windows), then restores previous clipboard after a delay.
+- Text is split on `[#ImageN]` tokens; each run (text or image) is put on the clipboard (`arboard`) and pasted, so CLIs like Claude Code get each image as its own inline placeholder.
+- **Linux**: paste via `xdotool key --clearmodifiers`. If the focused window's `WM_CLASS` (via `xdotool getactivewindow` + `xprop` — this xdotool has no `getwindowclassname`) is a known terminal (`TERMINALS` list), text uses `ctrl+shift+v`: terminals like Ghostty forward ctrl+v as raw `^V`, which Claude Code handles by reading the clipboard itself but Codex/agy ignore. Images always use `ctrl+v` (terminals can't paste images; the CLI reads it from the clipboard on `^V`). IDE-embedded terminals carry the IDE's class and get plain `ctrl+v`. X11-only.
+- **macOS/Windows**: same clipboard runs + simulated paste (`enigo`: Cmd+V on macOS, Ctrl+V on Windows).
 
-Keep this split — don't switch Linux to clipboard+paste (terminal-detection bug blocks it) or macOS to xdotool-style typing (no xdotool on macOS; enigo paste is faster for long text and unicode-safe).
+Don't switch to simulated typing (`xdotool type`): slow char-by-char and mangles Vietnamese diacritics (no keysym).
 
 TODO: Wayland fallback (ydotool/wtype) not implemented.
 

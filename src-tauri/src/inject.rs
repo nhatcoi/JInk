@@ -7,7 +7,12 @@
 // Clipboard paste (not simulated typing) because `xdotool type` is slow
 // char-by-char and mangles non-ASCII: Vietnamese diacritics have no keysym.
 //
-// Linux: paste via `xdotool key ctrl+v`. macOS / Windows: enigo paste.
+// Linux: paste via `xdotool key`. Terminals (Ghostty, Konsole, ...) don't paste
+// on ctrl+v — they forward a raw ^V, which only apps that read the clipboard
+// themselves (Claude Code) act on; Codex/agy ignore it. So text goes through
+// ctrl+shift+v there. Images stay on ctrl+v: the terminal can't paste an image,
+// but the CLI reads it from the clipboard on ^V.
+// macOS / Windows: enigo paste.
 use std::{borrow::Cow, thread, time::Duration};
 
 enum Part {
@@ -62,6 +67,7 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
     // Give focus a moment to return to the target app after the popup hides.
     thread::sleep(Duration::from_millis(120));
 
+    let text_keys = if target_is_terminal() { "ctrl+shift+v" } else { "ctrl+v" };
     let mut cb = arboard::Clipboard::new().map_err(|e| format!("clipboard init: {e}"))?;
     for part in split_parts(text) {
         match part {
@@ -70,7 +76,7 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
                     continue;
                 }
                 cb.set_text(s).map_err(|e| format!("clipboard text: {e}"))?;
-                paste()?;
+                paste(text_keys)?;
                 thread::sleep(Duration::from_millis(80));
             }
             Part::Image(n) => {
@@ -80,13 +86,13 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
                     None => {
                         cb.set_text(format!("[#Image{n}]"))
                             .map_err(|e| format!("clipboard text: {e}"))?;
-                        paste()?;
+                        paste(text_keys)?;
                         thread::sleep(Duration::from_millis(80));
                         continue;
                     }
                 };
                 set_clipboard_image(&mut cb, path)?;
-                paste()?;
+                paste("ctrl+v")?;
                 // Let the target consume the image paste before the next run.
                 thread::sleep(Duration::from_millis(250));
             }
@@ -95,10 +101,37 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
     Ok(())
 }
 
+/// Standalone terminal emulators, matched against the X11 window class.
+/// Terminals embedded in an IDE carry the IDE's class and aren't caught here.
 #[cfg(target_os = "linux")]
-fn paste() -> Result<(), String> {
+const TERMINALS: &[&str] = &[
+    "ghostty", "konsole", "kitty", "alacritty", "wezterm", "gnome-terminal",
+    "xterm", "urxvt", "tilix", "terminator", "foot", "yakuake", "xfce4-terminal",
+    "st-256color", "terminology", "ptyxis", "warp",
+];
+
+#[cfg(target_os = "linux")]
+fn target_is_terminal() -> bool {
+    use std::process::Command;
+    // This xdotool build has no `getwindowclassname`; read WM_CLASS via xprop.
+    let Ok(id) = Command::new("xdotool").arg("getactivewindow").output() else {
+        return false;
+    };
+    let id = String::from_utf8_lossy(&id.stdout).trim().to_string();
+    if id.is_empty() {
+        return false;
+    }
+    let Ok(out) = Command::new("xprop").args(["-id", &id, "WM_CLASS"]).output() else {
+        return false;
+    };
+    let class = String::from_utf8_lossy(&out.stdout).to_lowercase();
+    TERMINALS.iter().any(|t| class.contains(t))
+}
+
+#[cfg(target_os = "linux")]
+fn paste(keys: &str) -> Result<(), String> {
     let status = std::process::Command::new("xdotool")
-        .args(["key", "--clearmodifiers", "ctrl+v"])
+        .args(["key", "--clearmodifiers", keys])
         .status()
         .map_err(|e| format!("xdotool not available: {e}"))?;
     if !status.success() {
