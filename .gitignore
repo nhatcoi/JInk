@@ -25,6 +25,7 @@ dist-ssr
 
 # Rust / Tauri build
 /src-tauri/target
+/target
 
 # Local Claude Code config
 .claude/

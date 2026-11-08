@@ -1,0 +1,32 @@
+[package]
+name = "jink"
+version = "0.2.0"
+description = "Quick input popup with translate, AI enhance and voice in Native GPUI"
+authors = ["nhatcoi"]
+edition = "2021"
+
+[dependencies]
+gpui = "0.2.2"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arboard = "3"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+anyhow = "1"
+dirs = "5"
+global-hotkey = "0.9"
+tray-icon = { version = "0.26", default-features = false }
+muda = "0.21"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+enigo = "0.3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
