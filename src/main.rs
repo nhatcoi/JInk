@@ -105,16 +105,21 @@ fn main() {
     let receiver = GlobalHotKeyEvent::receiver();
 
     Application::new().run(move |cx| {
-        // Open once initially on start
+        // Mở popup ngay khi khởi động
         open_popup(cx);
 
-        // Background loop for global hotkey
+        // Vòng lặp lắng nghe phím tắt toàn cục bất đồng bộ (Non-blocking async timer)
         cx.spawn(async move |cx| {
-            while let Ok(event) = receiver.recv() {
-                if event.state == global_hotkey::HotKeyState::Pressed {
-                    let _ = cx.update(|cx| {
-                        toggle_popup(cx);
-                    });
+            loop {
+                // Yield to event loop, sleep 30ms không bao giờ làm block main thread
+                cx.background_executor().timer(std::time::Duration::from_millis(30)).await;
+
+                while let Ok(event) = receiver.try_recv() {
+                    if event.state == global_hotkey::HotKeyState::Pressed {
+                        let _ = cx.update(|cx| {
+                            toggle_popup(cx);
+                        });
+                    }
                 }
             }
         })

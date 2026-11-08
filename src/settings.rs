@@ -29,8 +29,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            ai_base_url: String::new(),
-            ai_model: String::new(),
+            ai_base_url: "https://api.openai.com/v1".to_string(),
+            ai_model: "gpt-4o-mini".to_string(),
             ai_key: String::new(),
             ai_history: Vec::new(),
             search_key: String::new(),
@@ -57,7 +57,36 @@ pub fn load_settings() -> Settings {
             return settings;
         }
     }
-    Settings::default()
+
+    // Try fallback from legacy Tauri location if exists
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let legacy = home.join("Library/Application Support/com.nhatcoi.easyinput/settings.json");
+            if let Ok(content) = std::fs::read_to_string(&legacy) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(s) = val.get("settings") {
+                        let mut defaults = Settings::default();
+                        if let Some(url) = s.get("aiBaseUrl").and_then(|v| v.as_str()) {
+                            defaults.ai_base_url = url.to_string();
+                        }
+                        if let Some(m) = s.get("aiModel").and_then(|v| v.as_str()) {
+                            defaults.ai_model = m.to_string();
+                        }
+                        if let Some(k) = s.get("aiKey").and_then(|v| v.as_str()) {
+                            defaults.ai_key = k.to_string();
+                        }
+                        let _ = save_settings(&defaults);
+                        return defaults;
+                    }
+                }
+            }
+        }
+    }
+
+    let defaults = Settings::default();
+    let _ = save_settings(&defaults);
+    defaults
 }
 
 pub fn save_settings(settings: &Settings) -> Result<(), String> {
@@ -69,4 +98,3 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
-

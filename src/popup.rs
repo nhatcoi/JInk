@@ -157,7 +157,35 @@ impl JInkPopup {
         cx.notify();
     }
 
+    pub fn paste_api_key_from_clipboard(&mut self, cx: &mut Context<Self>) {
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            if let Ok(clip_text) = cb.get_text() {
+                let trimmed = clip_text.trim().to_string();
+                if !trimmed.is_empty() {
+                    self.settings.ai_key = trimmed;
+                    self.save_current_settings(cx);
+                    self.status = Some("Đã cập nhật API Key từ Clipboard!".into());
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub fn set_preset(&mut self, base_url: &str, model: &str, cx: &mut Context<Self>) {
+        self.settings.ai_base_url = base_url.to_string();
+        self.settings.ai_model = model.to_string();
+        self.save_current_settings(cx);
+    }
+
     fn start_ai_stream(&mut self, messages: Vec<ai::ChatMessage>, cx: &mut Context<Self>) {
+        let is_local = self.settings.ai_base_url.contains("localhost") || self.settings.ai_base_url.contains("127.0.0.1");
+        if self.settings.ai_key.trim().is_empty() && !is_local {
+            self.status = Some("Chưa có API Key. Bấm ⚙️ để nhập key.".into());
+            self.active_view = ActiveView::Settings;
+            cx.notify();
+            return;
+        }
+
         self.undo_text = Some(self.text.clone());
         self.text.clear();
         self.cursor = 0;
@@ -174,10 +202,15 @@ impl JInkPopup {
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Spawn async AI request
-        cx.spawn(async move |entity, cx| {
-            ai::stream_chat(config, messages, vec![], tx).await;
+        // 1. Chạy network call trên Background thread pool (không block UI/Main thread)
+        cx.background_executor()
+            .spawn(async move {
+                ai::stream_chat(config, messages, vec![], tx).await;
+            })
+            .detach();
 
+        // 2. Lắng nghe token trên UI context để update mượt mà
+        cx.spawn(async move |entity, cx| {
             while let Some(event) = rx.recv().await {
                 let _ = entity.update(cx, |this, cx| match event {
                     AiStreamEvent::Token(token) => {
@@ -217,7 +250,12 @@ impl Render for JInkPopup {
 
                 // Handle global shortcuts
                 if key == "escape" {
-                    window.remove_window();
+                    if this.active_view == ActiveView::Settings {
+                        this.active_view = ActiveView::Input;
+                        cx.notify();
+                    } else {
+                        window.remove_window();
+                    }
                     return;
                 }
 
@@ -437,6 +475,8 @@ impl JInkPopup {
     }
 
     fn render_settings_view(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_key = !self.settings.ai_key.trim().is_empty();
+
         div()
             .flex()
             .flex_col()
@@ -459,39 +499,18 @@ impl JInkPopup {
                     )
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .px_2p5()
-                                    .py_1()
-                                    .rounded_md()
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .bg(Theme::blue())
-                                    .text_color(Theme::crust())
-                                    .hover(|s| s.opacity(0.9).cursor_pointer())
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                        this.save_current_settings(cx);
-                                    }))
-                                    .child("💾 Lưu"),
-                            )
-                            .child(
-                                div()
-                                    .px_2p5()
-                                    .py_1()
-                                    .rounded_md()
-                                    .text_xs()
-                                    .bg(Theme::surface0())
-                                    .text_color(Theme::text())
-                                    .hover(|s| s.bg(Theme::surface1()).cursor_pointer())
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                        this.active_view = ActiveView::Input;
-                                        cx.notify();
-                                    }))
-                                    .child("✕ Đóng"),
-                            ),
+                            .px_2p5()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .bg(Theme::surface0())
+                            .text_color(Theme::text())
+                            .hover(|s| s.bg(Theme::surface1()).cursor_pointer())
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                this.active_view = ActiveView::Input;
+                                cx.notify();
+                            }))
+                            .child("✕ Quay lại"),
                     ),
             )
             .child(
@@ -500,22 +519,112 @@ impl JInkPopup {
                     .flex_col()
                     .gap_2()
                     .child(self.render_setting_row("AI Base URL", &self.settings.ai_base_url, "https://api.openai.com/v1"))
-                    .child(self.render_setting_row("AI Model", &self.settings.ai_model, "gpt-4o-mini hoặc qwen2.5:7b"))
-                    .child(self.render_setting_row("API Key", if self.settings.ai_key.is_empty() { "Chưa đặt" } else { "••••••••••••" }, "sk-..."))
+                    .child(self.render_setting_row("AI Model", &self.settings.ai_model, "gpt-4o-mini"))
+                    .child(self.render_setting_row(
+                        "API Key",
+                        if has_key { "•••••••••••• (Đã cấu hình)" } else { "Chưa đặt (Nhấn nút dưới để dán)" },
+                        "sk-..."
+                    ))
                     .child(self.render_setting_row("Hotkey", &self.settings.hotkey, "Alt+Space"))
+            )
+            // Presets & Quick Actions
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .pt_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(Theme::subtext0())
+                            .child("Cấu hình nhanh:")
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .bg(Theme::surface0())
+                                    .text_color(Theme::text())
+                                    .hover(|s| s.bg(Theme::surface1()).cursor_pointer())
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.set_preset("https://api.openai.com/v1", "gpt-4o-mini", cx);
+                                    }))
+                                    .child("OpenAI (gpt-4o-mini)")
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .bg(Theme::surface0())
+                                    .text_color(Theme::text())
+                                    .hover(|s| s.bg(Theme::surface1()).cursor_pointer())
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.set_preset("http://localhost:11434/v1", "qwen2.5:7b", cx);
+                                    }))
+                                    .child("Ollama Local")
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .bg(Theme::surface0())
+                                    .text_color(Theme::text())
+                                    .hover(|s| s.bg(Theme::surface1()).cursor_pointer())
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.set_preset("https://openrouter.ai/api/v1", "meta-llama/llama-3.3-70b-instruct", cx);
+                                    }))
+                                    .child("OpenRouter")
+                            )
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .pt_2()
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .bg(Theme::blue())
+                                    .text_color(Theme::crust())
+                                    .hover(|s| s.opacity(0.9).cursor_pointer())
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.paste_api_key_from_clipboard(cx);
+                                    }))
+                                    .child("📋 Dán API Key từ Clipboard")
+                            )
+                    )
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .justify_end()
+                    .justify_between()
                     .pt_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(Theme::overlay0())
-                            .child("Tệp cấu hình lưu tại ~/.config/jink/settings.json"),
-                    )
+                    .border_t_1()
+                    .border_color(Theme::surface0())
+                    .child(if let Some(status) = &self.status {
+                        div().text_xs().text_color(Theme::yellow()).child(status.clone()).into_any_element()
+                    } else {
+                        div().text_xs().text_color(Theme::overlay0()).child("Tệp cấu hình: ~/.config/jink/settings.json").into_any_element()
+                    })
             )
     }
 
