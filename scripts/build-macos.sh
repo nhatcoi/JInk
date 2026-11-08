@@ -61,3 +61,4 @@ EOF
 
 echo "==> Successfully created $APP_DIR!"
 echo "You can launch it directly with: open $APP_DIR"
+
