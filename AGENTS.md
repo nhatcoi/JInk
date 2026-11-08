@@ -23,7 +23,8 @@
 
 ## Popup show/hide & focus (`src/main.rs`)
 
-- Global hotkey (default `Alt+Space`) toggles popup visibility.
+- Global hotkey: dynamically loaded from `settings.hotkey` (default `Control+Cmd+Space`).
+- On macOS, a low-latency `CGEventTap` listener detects isolated `Control + Cmd` press-and-release chord (<800ms with no intervening keypresses). Both `Control+Cmd` chord tap and `Control+Cmd+Space` seamlessly toggle popup visibility.
 - Hotkey loop uses non-blocking polling (`receiver.try_recv()` + async 30ms timer on `BackgroundExecutor`) to prevent main thread blocking.
 - `cursor_position`: uses CoreGraphics (`CGEventGetLocation`) on macOS and `xdotool getmouselocation` on Linux to place popup 12px right / 16px below cursor.
 - Window kind is `PopUp`, transparent background, borderless.

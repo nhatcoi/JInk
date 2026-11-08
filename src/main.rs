@@ -98,11 +98,148 @@ fn toggle_popup(cx: &mut App) {
     }
 }
 
+fn parse_or_default_hotkey(hotkey_str: &str) -> HotKey {
+    if let Ok(hk) = hotkey_str.parse::<HotKey>() {
+        return hk;
+    }
+    // Nếu chuỗi chỉ có modifiers (ví dụ "Control+Cmd" hay "Ctrl+Cmd"), bổ sung thêm phím Space
+    let with_space = format!("{}+Space", hotkey_str.trim_end_matches('+'));
+    if let Ok(hk) = with_space.parse::<HotKey>() {
+        return hk;
+    }
+    HotKey::new(Some(Modifiers::CONTROL | Modifiers::META), Code::Space)
+}
+
+#[cfg(target_os = "macos")]
+mod macos_chord {
+    use std::ptr;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::Sender;
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: extern "C" fn(*mut std::ffi::c_void, u32, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+            user_info: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+        fn CGEventGetFlags(event: *mut std::ffi::c_void) -> u64;
+        fn CGEventTapEnable(tap: *mut std::ffi::c_void, enable: bool);
+
+        fn CFMachPortCreateRunLoopSource(
+            allocator: *const std::ffi::c_void,
+            port: *mut std::ffi::c_void,
+            order: isize,
+        ) -> *mut std::ffi::c_void;
+
+        fn CFRunLoopGetCurrent() -> *mut std::ffi::c_void;
+        fn CFRunLoopAddSource(rl: *mut std::ffi::c_void, source: *mut std::ffi::c_void, mode: *const std::ffi::c_void);
+        fn CFRunLoopRun();
+
+        static kCFRunLoopCommonModes: *const std::ffi::c_void;
+    }
+
+    static CHORD_ACTIVE: AtomicBool = AtomicBool::new(false);
+    static KEY_PRESSED: AtomicBool = AtomicBool::new(false);
+    static CHORD_START: Mutex<Option<Instant>> = Mutex::new(None);
+    static SENDER: Mutex<Option<Sender<()>>> = Mutex::new(None);
+    static TAP_PORT: Mutex<Option<usize>> = Mutex::new(None);
+
+    extern "C" fn tap_callback(
+        _proxy: *mut std::ffi::c_void,
+        event_type: u32,
+        event: *mut std::ffi::c_void,
+        _user_info: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void {
+        // kCGEventTapDisabledByTimeout = 0xFFFFFFFE
+        if event_type == 0xFFFF_FFFE || event_type == 0xFFFF_FFFF {
+            if let Ok(guard) = TAP_PORT.lock() {
+                if let Some(port) = *guard {
+                    unsafe {
+                        CGEventTapEnable(port as *mut std::ffi::c_void, true);
+                    }
+                }
+            }
+            return event;
+        }
+
+        if event_type == 10 { // kCGEventKeyDown
+            KEY_PRESSED.store(true, Ordering::SeqCst);
+        } else if event_type == 12 { // kCGEventFlagsChanged
+            let flags = unsafe { CGEventGetFlags(event) };
+            let has_ctrl = (flags & 0x00040000) != 0;
+            let has_cmd = (flags & 0x00100000) != 0;
+            let has_alt = (flags & 0x00080000) != 0;
+            let has_shift = (flags & 0x00020000) != 0;
+
+            if has_ctrl && has_cmd && !has_alt && !has_shift {
+                if !CHORD_ACTIVE.swap(true, Ordering::SeqCst) {
+                    KEY_PRESSED.store(false, Ordering::SeqCst);
+                    if let Ok(mut guard) = CHORD_START.lock() {
+                        *guard = Some(Instant::now());
+                    }
+                }
+            } else if CHORD_ACTIVE.swap(false, Ordering::SeqCst) {
+                if !KEY_PRESSED.load(Ordering::SeqCst) {
+                    let start = CHORD_START.lock().ok().and_then(|mut g| g.take());
+                    if let Some(start) = start {
+                        // Nhấn nhả Control + Cmd trong khoảng 800ms
+                        if start.elapsed() < std::time::Duration::from_millis(800) {
+                            if let Ok(guard) = SENDER.lock() {
+                                if let Some(ref tx) = *guard {
+                                    let _ = tx.send(());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        event
+    }
+
+    pub fn start_chord_listener(tx: Sender<()>) {
+        std::thread::spawn(move || unsafe {
+            if let Ok(mut guard) = SENDER.lock() {
+                *guard = Some(tx);
+            }
+            let mask = (1 << 12) | (1 << 10);
+            let tap = CGEventTapCreate(1, 0, 1, mask, tap_callback, ptr::null_mut());
+            if tap.is_null() {
+                return;
+            }
+            if let Ok(mut guard) = TAP_PORT.lock() {
+                *guard = Some(tap as usize);
+            }
+            let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
+            if source.is_null() {
+                return;
+            }
+            let rl = CFRunLoopGetCurrent();
+            CFRunLoopAddSource(rl, source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+            CFRunLoopRun();
+        });
+    }
+}
+
 fn main() {
+    let settings = settings::load_settings();
     let hotkey_manager = GlobalHotKeyManager::new().expect("Failed to init global hotkey manager");
-    let hotkey = HotKey::new(Some(Modifiers::ALT), Code::Space);
-    hotkey_manager.register(hotkey).expect("Failed to register Alt+Space");
+    let hotkey = parse_or_default_hotkey(&settings.hotkey);
+    let _ = hotkey_manager.register(hotkey);
     let receiver = GlobalHotKeyEvent::receiver();
+
+    #[cfg(target_os = "macos")]
+    let (chord_tx, chord_rx) = std::sync::mpsc::channel();
+    #[cfg(target_os = "macos")]
+    macos_chord::start_chord_listener(chord_tx);
 
     Application::new().run(move |cx| {
         // Mở popup ngay khi khởi động
@@ -120,6 +257,13 @@ fn main() {
                             toggle_popup(cx);
                         });
                     }
+                }
+
+                #[cfg(target_os = "macos")]
+                while let Ok(()) = chord_rx.try_recv() {
+                    let _ = cx.update(|cx| {
+                        toggle_popup(cx);
+                    });
                 }
             }
         })

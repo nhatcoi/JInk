@@ -525,7 +525,7 @@ impl JInkPopup {
                         if has_key { "•••••••••••• (Đã cấu hình)" } else { "Chưa đặt (Nhấn nút dưới để dán)" },
                         "sk-..."
                     ))
-                    .child(self.render_setting_row("Hotkey", &self.settings.hotkey, "Alt+Space"))
+                    .child(self.render_setting_row("Hotkey", &self.settings.hotkey, "Control+Cmd+Space"))
             )
             // Presets & Quick Actions
             .child(

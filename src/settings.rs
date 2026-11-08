@@ -34,7 +34,7 @@ impl Default for Settings {
             ai_key: String::new(),
             ai_history: Vec::new(),
             search_key: String::new(),
-            hotkey: "Alt+Space".to_string(),
+            hotkey: "Control+Cmd+Space".to_string(),
             width: 680.0,
             height: 150.0,
             translate_from: "auto".to_string(),
