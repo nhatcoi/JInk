@@ -99,8 +99,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-right", LineEnd, c),
         KeyBinding::new("home", LineStart, c),
         KeyBinding::new("end", LineEnd, c),
-        KeyBinding::new("ctrl-a", LineStart, c),
-        KeyBinding::new("ctrl-e", LineEnd, c),
         KeyBinding::new("shift-cmd-left", SelectLineStart, c),
         KeyBinding::new("shift-cmd-right", SelectLineEnd, c),
         KeyBinding::new("shift-home", SelectLineStart, c),
@@ -112,7 +110,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-cmd-up", SelectDocStart, c),
         KeyBinding::new("shift-cmd-down", SelectDocEnd, c),
         KeyBinding::new("cmd-a", SelectAll, c),
-        KeyBinding::new("ctrl-shift-a", SelectAll, c),
         KeyBinding::new("cmd-c", Copy, c),
         KeyBinding::new("cmd-x", Cut, c),
         KeyBinding::new("cmd-v", Paste, c),
@@ -128,6 +125,17 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-enter", Newline, c),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, c),
     ]);
+    // emacs line motion is macOS-only: elsewhere Ctrl+A is select-all and Ctrl+E is the refine shortcut
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new("ctrl-a", LineStart, c),
+        KeyBinding::new("ctrl-e", LineEnd, c),
+    ]);
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([
+        KeyBinding::new("ctrl-a", SelectAll, c),
+        KeyBinding::new("ctrl-shift-a", SelectAll, c),
+    ]);
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +146,8 @@ pub enum TextInputEvent {
     Changed,
     /// Undo requested but the local history is empty.
     UndoEmpty,
+    /// Clipboard held an image and no text on paste.
+    PasteImage,
 }
 
 #[derive(Clone)]
@@ -747,6 +757,8 @@ impl TextInput {
             }
             let r = self.selected_range.clone();
             self.edit(r, &text, false, cx);
+        } else {
+            cx.emit(TextInputEvent::PasteImage);
         }
     }
 

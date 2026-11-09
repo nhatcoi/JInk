@@ -228,11 +228,23 @@ async fn web_search(api_key: &str, query: &str) -> anyhow::Result<String> {
     Ok(out)
 }
 
-pub fn enhance_prompt(text: &str) -> Vec<ChatMessage> {
+const MAX_CONTEXT_CHARS: usize = 4000;
+
+fn with_context(instruction: String, context: Option<&str>) -> String {
+    match context {
+        Some(c) => {
+            let c: String = c.chars().take(MAX_CONTEXT_CHARS).collect();
+            format!("{instruction}\n\nBackground context (text the user selected in another app). Use it only to understand intent and terminology; never repeat or include it in your answer:\n<context>\n{c}\n</context>")
+        }
+        None => instruction,
+    }
+}
+
+pub fn enhance_prompt(text: &str, context: Option<&str>) -> Vec<ChatMessage> {
     vec![
         ChatMessage {
             role: "system".into(),
-            content: "You are a writing assistant. Improve the user's text: fix grammar, spelling and clarity while preserving meaning, tone and language. Return ONLY the improved text, no quotes, no explanation.".into(),
+            content: with_context("You are a writing assistant. Improve the user's text: fix grammar, spelling and clarity while preserving meaning, tone and language. Return ONLY the improved text, no quotes, no explanation.".into(), context),
         },
         ChatMessage {
             role: "user".into(),
@@ -259,11 +271,11 @@ pub fn translate_prompt(text: &str, from: &str, to: &str) -> Vec<ChatMessage> {
     ]
 }
 
-pub fn explain_prompt(text: &str, lang: &str) -> Vec<ChatMessage> {
+pub fn explain_prompt(text: &str, lang: &str, context: Option<&str>) -> Vec<ChatMessage> {
     vec![
         ChatMessage {
             role: "system".into(),
-            content: format!("You are a concise explainer. Explain the meaning of the word, sentence, or concept the user sends. Answer in {lang} if you are fluent in it; otherwise answer in English. Be brief: 1-3 short sentences, no preamble, no quotes."),
+            content: with_context(format!("You are a concise explainer. Explain the meaning of the word, sentence, or concept the user sends. Answer in {lang} if you are fluent in it; otherwise answer in English. Be brief: 1-3 short sentences, no preamble, no quotes."), context),
         },
         ChatMessage {
             role: "user".into(),

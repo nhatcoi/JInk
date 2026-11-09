@@ -63,43 +63,165 @@ fn cursor_position() -> Option<Point<Pixels>> {
     None
 }
 
+static POPUP_WINDOW: std::sync::Mutex<Option<AnyWindowHandle>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+struct KeeperView;
+#[cfg(target_os = "linux")]
+impl Render for KeeperView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+// KWin ignores the requested position of a Normal window and gpui's X11 window_handle() is
+// unimplemented: find our widest window (not the 1px keeper) via xdotool, then place/pin/focus it.
+// 20ms poll: slower polling lets KWin show the window at its own spot (centered) before the move.
+#[cfg(target_os = "linux")]
+pub fn place_x11_popup(origin: Option<(i32, i32)>) {
+    let script = r#"for i in $(seq 100); do sleep 0.02
+for w in $(xdotool search --pid $PID_JINK); do
+eval $(xdotool getwindowgeometry --shell $w)
+[ "$WIDTH" -gt 1 ] || continue
+[ -n "$JINK_X" ] && xdotool windowmove $w $JINK_X $JINK_Y
+[ -n "$JINK_X" ] && wmctrl -i -r $w -b add,above,skip_taskbar,skip_pager
+xdotool windowfocus $w && exit 0
+done; done"#;
+    let mut cmd = std::process::Command::new("sh");
+    cmd.args(["-c", script]).stderr(std::process::Stdio::null()).env("PID_JINK", std::process::id().to_string());
+    if let Some((x, y)) = origin {
+        cmd.env("JINK_X", x.to_string()).env("JINK_Y", y.to_string());
+    }
+    let _ = cmd.spawn();
+}
+
+// PRIMARY selection = text highlighted in the previously focused app
+#[cfg(target_os = "linux")]
+fn selected_text() -> Option<String> {
+    use arboard::{GetExtLinux, LinuxClipboardKind};
+    let text = arboard::Clipboard::new()
+        .ok()?
+        .get()
+        .clipboard(LinuxClipboardKind::Primary)
+        .text()
+        .ok()?;
+    let text = text.trim_end().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn selected_text() -> Option<String> {
+    None
+}
+
 fn open_popup(cx: &mut App) {
     let popup_size = size(px(560.0), px(118.0));
-    let bounds = if let Some(cursor) = cursor_position() {
-        let x = cursor.x + px(12.0);
-        let y = cursor.y + px(16.0);
-        Bounds::new(Point::new(x, y), popup_size)
+    let settings = settings::load_settings();
+    let selection = if settings.prefill_selection || settings.selection_context { selected_text() } else { None };
+    let (initial_text, context) = if settings.prefill_selection { (selection, None) } else { (None, selection) };
+    let anchor = if settings.follow_cursor {
+        cursor_position().map(|c| Point::new(c.x + px(12.0), c.y + px(16.0)))
     } else {
-        Bounds::centered(None, popup_size, cx)
+        settings.popup_x.zip(settings.popup_y).map(|(x, y)| Point::new(px(x), px(y)))
     };
+    let bounds = match anchor {
+        Some(mut origin) => {
+            // keep the popup on a display (settings panel growth included)
+            let max_h = px(410.0);
+            if let Some(area) = cx.displays().into_iter().map(|d| d.bounds()).find(|d| d.contains(&origin)) {
+                origin.x = origin.x.min(area.right() - popup_size.width).max(area.left());
+                origin.y = origin.y.min(area.bottom() - max_h).max(area.top());
+            }
+            Bounds::new(origin, popup_size)
+        }
+        None => Bounds::centered(None, popup_size, cx),
+    };
+
+    #[cfg(target_os = "linux")]
+    let placed_at = Some((f32::from(bounds.origin.x) as i32, f32::from(bounds.origin.y) as i32));
 
     let window_options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
+        #[cfg(target_os = "linux")]
+        window_background: WindowBackgroundAppearance::Opaque,
+        #[cfg(not(target_os = "linux"))]
         window_background: WindowBackgroundAppearance::Blurred,
+        // X11 PopUp = NOTIFICATION window type: KWin never keeps keyboard focus on it
+        #[cfg(target_os = "linux")]
+        kind: WindowKind::Normal,
+        // no KWin titlebar: our own header is the drag handle
+        #[cfg(target_os = "linux")]
+        window_decorations: Some(WindowDecorations::Client),
+        #[cfg(not(target_os = "linux"))]
         kind: WindowKind::PopUp,
         ..Default::default()
     };
 
-    let _ = cx.open_window(window_options, |window, cx| {
-        let popup = cx.new(|cx| JInkPopup::new(window, cx));
-        let handle = popup.read(cx).input.focus_handle(cx);
-        window.focus(&handle);
+    if let Ok(handle) = cx.open_window(window_options, |window, cx| {
+        let popup = cx.new(|cx| JInkPopup::new(initial_text, context, window, cx));
+        let input_handle = popup.read(cx).input.focus_handle(cx);
+        window.activate_window();
+        #[cfg(target_os = "linux")]
+        place_x11_popup(placed_at);
+        window.focus(&input_handle);
         popup
-    });
+    }) {
+        if let Ok(mut guard) = POPUP_WINDOW.lock() {
+            *guard = Some(handle.into());
+        }
+    }
 }
 
 fn toggle_popup(cx: &mut App) {
-    let open_windows: Vec<AnyWindowHandle> = cx.windows();
-    if open_windows.is_empty() {
-        open_popup(cx);
-    } else {
-        for window in open_windows {
-            window.update(cx, |_, window, _| {
-                window.remove_window();
-            }).ok();
+    let mut is_open = false;
+    if let Ok(mut guard) = POPUP_WINDOW.lock() {
+        if let Some(handle) = guard.take() {
+            let open_windows: Vec<AnyWindowHandle> = cx.windows();
+            if open_windows.contains(&handle) {
+                is_open = true;
+                handle.update(cx, |_, window, _| {
+                    window.remove_window();
+                }).ok();
+            }
         }
     }
+
+    if !is_open {
+        open_popup(cx);
+    }
+}
+
+static HOTKEY_MANAGER: std::sync::Mutex<Option<GlobalHotKeyManager>> = std::sync::Mutex::new(None);
+static CURRENT_HOTKEY: std::sync::Mutex<Option<HotKey>> = std::sync::Mutex::new(None);
+
+pub fn update_global_hotkey(hotkey_str: &str) -> bool {
+    // strict parse: partial text typed in settings ("Alt+S") must not grab a real key combo
+    let Ok(new_hotkey) = hotkey_str.parse::<HotKey>() else {
+        return false;
+    };
+    let (Ok(guard), Ok(mut current)) = (HOTKEY_MANAGER.lock(), CURRENT_HOTKEY.lock()) else {
+        return false;
+    };
+    let Some(manager) = guard.as_ref() else {
+        return false;
+    };
+    if *current == Some(new_hotkey) {
+        return true;
+    }
+    let previous = *current;
+    if let Some(old) = previous {
+        let _ = manager.unregister(old);
+    }
+    if manager.register(new_hotkey).is_ok() {
+        *current = Some(new_hotkey);
+        return true;
+    }
+    // new combo taken by another app: restore the old one
+    if let Some(old) = previous {
+        let _ = manager.register(old);
+    }
+    false
 }
 
 fn parse_or_default_hotkey(hotkey_str: &str) -> HotKey {
@@ -111,6 +233,9 @@ fn parse_or_default_hotkey(hotkey_str: &str) -> HotKey {
     if let Ok(hk) = with_space.parse::<HotKey>() {
         return hk;
     }
+    #[cfg(target_os = "linux")]
+    return HotKey::new(Some(Modifiers::ALT), Code::Space);
+    #[cfg(not(target_os = "linux"))]
     HotKey::new(Some(Modifiers::CONTROL | Modifiers::META), Code::Space)
 }
 
@@ -271,7 +396,16 @@ fn main() {
     let settings = settings::load_settings();
     let hotkey_manager = GlobalHotKeyManager::new().expect("Failed to init global hotkey manager");
     let hotkey = parse_or_default_hotkey(&settings.hotkey);
-    let _ = hotkey_manager.register(hotkey);
+    if let Err(e) = hotkey_manager.register(hotkey) {
+        // X11 reports a grab owned by the desktop (BadAccess) as "already registered"
+        eprintln!("[jink] cannot register hotkey {:?}: {e}", settings.hotkey);
+    }
+    if let Ok(mut current) = CURRENT_HOTKEY.lock() {
+        *current = Some(hotkey);
+    }
+    if let Ok(mut guard) = HOTKEY_MANAGER.lock() {
+        *guard = Some(hotkey_manager);
+    }
     let receiver = GlobalHotKeyEvent::receiver();
 
     #[cfg(target_os = "macos")]
@@ -281,6 +415,23 @@ fn main() {
 
     Application::new().with_assets(Assets).run(move |cx| {
         text_input::bind_keys(cx);
+
+        #[cfg(target_os = "linux")]
+        {
+            let keeper_options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Point::new(px(-9999.0), px(-9999.0)),
+                    size(px(1.0), px(1.0)),
+                ))),
+                titlebar: None,
+                kind: WindowKind::PopUp,
+                ..Default::default()
+            };
+            let _ = cx.open_window(keeper_options, |_window, cx| {
+                cx.new(|_| KeeperView)
+            });
+        }
+
         // Mở popup ngay khi khởi động
         open_popup(cx);
 

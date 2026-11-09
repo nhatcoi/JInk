@@ -30,11 +30,15 @@ impl Theme {
     pub const KEY: u32 = 0x221f1a;      // keycap / hover surface
     pub const RULE: u32 = 0x2f2a24;     // hairlines / border
     pub const PAPER: u32 = 0xede6d6;    // main text
-    pub const DIM: u32 = 0x7d7568;      // muted text
+    pub const DIM: u32 = 0xa39b8c;      // muted text
     pub const SEAL: u32 = 0xe2543a;     // vermilion accent
     pub const AMBER: u32 = 0xd9a441;    // status
 
-    pub fn pill_bg() -> gpui::Rgba { rgba(0x13110e9e) } // translucent ink over blur
+    // X11 has no reliable blur: translucent ink over a busy terminal is unreadable
+    #[cfg(target_os = "linux")]
+    pub fn pill_bg() -> gpui::Rgba { rgb(Self::INK) }
+    #[cfg(not(target_os = "linux"))]
+    pub fn pill_bg() -> gpui::Rgba { rgba(0x13110e9e) }
     pub fn glass_edge() -> gpui::Rgba { rgba(0xffffff26) }
     pub fn pill_border() -> gpui::Rgba { rgba(0xffffff1f) }
     pub fn chip_hover() -> gpui::Rgba { rgba(0xffffff14) }

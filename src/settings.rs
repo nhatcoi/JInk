@@ -24,23 +24,38 @@ pub struct Settings {
     pub translate_to: String,
     pub main_language: String,
     pub hide_on_blur: bool,
+    pub follow_cursor: bool,
+    pub prefill_selection: bool,
+    pub selection_context: bool,
+    pub popup_x: Option<f32>,
+    pub popup_y: Option<f32>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
+        #[cfg(target_os = "linux")]
+        let hotkey = "Super+Space".to_string();
+        #[cfg(not(target_os = "linux"))]
+        let hotkey = "Control+Cmd+Space".to_string();
+
         Self {
             ai_base_url: "https://api.openai.com/v1".to_string(),
             ai_model: "gpt-4o-mini".to_string(),
             ai_key: String::new(),
             ai_history: Vec::new(),
             search_key: String::new(),
-            hotkey: "Control+Cmd+Space".to_string(),
+            hotkey,
             width: 680.0,
             height: 150.0,
             translate_from: "auto".to_string(),
             translate_to: "en".to_string(),
             main_language: "en".to_string(),
             hide_on_blur: true,
+            follow_cursor: false,
+            prefill_selection: false,
+            selection_context: true,
+            popup_x: None,
+            popup_y: None,
         }
     }
 }
