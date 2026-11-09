@@ -2,6 +2,7 @@ mod ai;
 mod inject;
 mod popup;
 mod settings;
+mod text_input;
 mod theme;
 
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
@@ -63,7 +64,7 @@ fn cursor_position() -> Option<Point<Pixels>> {
 }
 
 fn open_popup(cx: &mut App) {
-    let popup_size = size(px(680.0), px(160.0));
+    let popup_size = size(px(560.0), px(118.0));
     let bounds = if let Some(cursor) = cursor_position() {
         let x = cursor.x + px(12.0);
         let y = cursor.y + px(16.0);
@@ -75,13 +76,16 @@ fn open_popup(cx: &mut App) {
     let window_options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
-        window_background: WindowBackgroundAppearance::Transparent,
+        window_background: WindowBackgroundAppearance::Blurred,
         kind: WindowKind::PopUp,
         ..Default::default()
     };
 
-    let _ = cx.open_window(window_options, |_window, cx| {
-        cx.new(|cx| JInkPopup::new(cx))
+    let _ = cx.open_window(window_options, |window, cx| {
+        let popup = cx.new(|cx| JInkPopup::new(window, cx));
+        let handle = popup.read(cx).input.focus_handle(cx);
+        window.focus(&handle);
+        popup
     });
 }
 
@@ -229,6 +233,40 @@ mod macos_chord {
     }
 }
 
+/// Shared Tokio runtime: reqwest needs one, GPUI's executors are not Tokio.
+pub fn runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+    })
+}
+
+struct Assets;
+
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        let bytes: &'static [u8] = match path {
+            "svg/plus.svg" => include_bytes!("../assets/svg/plus.svg"),
+            "svg/arrow-up.svg" => include_bytes!("../assets/svg/arrow-up.svg"),
+            "svg/sparkles.svg" => include_bytes!("../assets/svg/sparkles.svg"),
+            "svg/languages.svg" => include_bytes!("../assets/svg/languages.svg"),
+            "svg/help.svg" => include_bytes!("../assets/svg/help.svg"),
+            "svg/settings.svg" => include_bytes!("../assets/svg/settings.svg"),
+            "svg/undo.svg" => include_bytes!("../assets/svg/undo.svg"),
+            _ => return Ok(None),
+        };
+        Ok(Some(std::borrow::Cow::Borrowed(bytes)))
+    }
+
+    fn list(&self, _path: &str) -> anyhow::Result<Vec<SharedString>> {
+        Ok(Vec::new())
+    }
+}
+
 fn main() {
     let settings = settings::load_settings();
     let hotkey_manager = GlobalHotKeyManager::new().expect("Failed to init global hotkey manager");
@@ -241,7 +279,8 @@ fn main() {
     #[cfg(target_os = "macos")]
     macos_chord::start_chord_listener(chord_tx);
 
-    Application::new().run(move |cx| {
+    Application::new().with_assets(Assets).run(move |cx| {
+        text_input::bind_keys(cx);
         // Mở popup ngay khi khởi động
         open_popup(cx);
 

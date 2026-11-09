@@ -1,4 +1,4 @@
-use gpui::rgb;
+use gpui::{rgb, rgba};
 
 #[allow(dead_code)]
 pub struct Theme;
@@ -25,6 +25,25 @@ impl Theme {
     pub const MAUVE: u32 = 0xcba6f7;       // AI Enhance sparkles
     pub const TEAL: u32 = 0x94e2d5;        // Translate icon
 
+    // "Ink & seal": warm ink black, paper-cream text, one vermilion accent.
+    pub const INK: u32 = 0x13110e;      // card background
+    pub const KEY: u32 = 0x221f1a;      // keycap / hover surface
+    pub const RULE: u32 = 0x2f2a24;     // hairlines / border
+    pub const PAPER: u32 = 0xede6d6;    // main text
+    pub const DIM: u32 = 0x7d7568;      // muted text
+    pub const SEAL: u32 = 0xe2543a;     // vermilion accent
+    pub const AMBER: u32 = 0xd9a441;    // status
+
+    pub fn pill_bg() -> gpui::Rgba { rgba(0x13110e9e) } // translucent ink over blur
+    pub fn glass_edge() -> gpui::Rgba { rgba(0xffffff26) }
+    pub fn pill_border() -> gpui::Rgba { rgba(0xffffff1f) }
+    pub fn chip_hover() -> gpui::Rgba { rgba(0xffffff14) }
+    pub fn send_blue() -> gpui::Rgba { rgb(Self::SEAL) }
+    pub fn hint() -> gpui::Rgba { rgb(Self::DIM) }
+    pub fn paper() -> gpui::Rgba { rgb(Self::PAPER) }
+    pub fn seal() -> gpui::Rgba { rgb(Self::SEAL) }
+    pub fn amber() -> gpui::Rgba { rgb(Self::AMBER) }
+    pub fn ink() -> gpui::Rgba { rgb(Self::INK) }
     pub fn crust() -> gpui::Rgba { rgb(Self::CRUST) }
     pub fn mantle() -> gpui::Rgba { rgb(Self::MANTLE) }
     pub fn base() -> gpui::Rgba { rgb(Self::BASE) }

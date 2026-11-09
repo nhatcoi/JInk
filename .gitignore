@@ -23,8 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# Rust / Tauri build
-/src-tauri/target
+# Rust build
 /target
 
 # Local Claude Code config

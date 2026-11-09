@@ -12,7 +12,15 @@
 
 - UI framework: **GPUI 0.2.2** (GPU-accelerated via Metal on macOS, Vulkan on Linux).
 - Footprint: ~20MB RAM idle, 4.3MB release binary. Zero Webview runtime overhead.
-- Styling: Catppuccin Mocha theme defined in `src/theme.rs`.
+- Styling: Gemini-style neutral dark pill (rounded-28, round send button, chip actions) via `src/theme.rs` (Catppuccin accents kept for settings/status).
+
+## Text input (`src/text_input.rs`)
+
+- Custom GPUI `TextInput` entity implementing `EntityInputHandler`: macOS IME (Telex/VNI, dead keys, emoji palette) works via marked text (`replace_and_mark_text_in_range`).
+- Multi-line, wrapped at `WRAP_WIDTH` (516px), scrolls after `MAX_HEIGHT`. Text shaped with `shape_text` in `request_layout`; offsets <-> points via `WrappedLine::position_for_index` / `closest_index_for_position`.
+- Keys are GPUI actions bound in context `JInkInput` (`bind_keys`): selection (Shift+arrows), word (Alt/Ctrl+arrows), line (Cmd+arrows/Home/End), doc (Cmd+Up/Down), delete word/line, Cmd+A/C/X/V, undo/redo (Cmd+Z / Cmd+Shift+Z, typing coalesced 900ms, one step per IME composition). Mouse: click, drag, double-click word, triple-click line, wheel scroll.
+- Events to `JInkPopup`: `Submit` (Enter -> inject; Shift/Alt+Enter = newline), `UndoEmpty` (falls back to AI undo), `Changed`.
+- AI streaming writes via `set_text_silent` / `append_silent` (no undo history; `undo_text` in popup restores the pre-AI text).
 
 ## Text injection (`src/inject.rs`)
 

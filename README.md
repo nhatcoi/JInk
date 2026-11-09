@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128@2x.png" width="96" alt="JInk logo" />
+<img src="assets/icons/128x128@2x.png" width="96" alt="JInk logo" />
 
 # JInk
 

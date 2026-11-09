@@ -23,8 +23,8 @@ cp "$DIR/target/release/jink" "$MACOS_DIR/jink"
 chmod +x "$MACOS_DIR/jink"
 
 # Copy icon
-if [ -f "$DIR/src-tauri/icons/icon.icns" ]; then
-    cp "$DIR/src-tauri/icons/icon.icns" "$RESOURCES_DIR/icon.icns"
+if [ -f "$DIR/assets/icons/icon.icns" ]; then
+    cp "$DIR/assets/icons/icon.icns" "$RESOURCES_DIR/icon.icns"
 fi
 
 # Create Info.plist

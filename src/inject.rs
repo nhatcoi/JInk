@@ -144,6 +144,7 @@ fn paste(keys: &str) -> Result<(), String> {
 /// through clipboard + a simulated paste shortcut.
 #[cfg(not(target_os = "linux"))]
 pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
+    eprintln!("[jink] inject_text called: {text:?}");
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     thread::sleep(Duration::from_millis(100));
 
@@ -176,6 +177,7 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
 /// macOS / Windows: simulate the paste shortcut with enigo.
 #[cfg(not(target_os = "linux"))]
 fn paste() -> Result<(), String> {
+    eprintln!("[jink] paste()");
     use enigo::{
         Direction::{Click, Press, Release},
         Enigo, Key, Keyboard, Settings as EnigoSettings,
