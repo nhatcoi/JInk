@@ -25,9 +25,16 @@ muda = "0.21"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 enigo = "0.3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.26", features = ["libappindicator"] }
+
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+[patch.crates-io]
+xattr = { path = "crates/xattr" }
+
 
