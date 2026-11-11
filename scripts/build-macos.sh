@@ -4,8 +4,20 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-echo "==> Building JInk in release mode..."
-cargo build --release
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+
+# UNIVERSAL=1: one binary for Apple Silicon + Intel. DMG=1: also make target/release/JInk-<ver>-macos.dmg
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+    echo "==> Building universal binary..."
+    cargo build --release --target aarch64-apple-darwin
+    cargo build --release --target x86_64-apple-darwin
+    mkdir -p target/release
+    lipo -create -output target/release/jink \
+        target/aarch64-apple-darwin/release/jink target/x86_64-apple-darwin/release/jink
+else
+    echo "==> Building JInk in release mode..."
+    cargo build --release
+fi
 
 APP_NAME="JInk"
 APP_DIR="$DIR/target/release/$APP_NAME.app"
@@ -44,7 +56,7 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2.0</string>
+    <string>$VERSION</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleIconFile</key>
@@ -74,6 +86,17 @@ if [ -n "$SIGN_ID" ]; then
 else
     echo "==> No signing identity found: ad-hoc signed, privacy grants reset on every rebuild."
     codesign --force --deep --sign - --identifier com.nhatcoi.jink "$APP_DIR"
+fi
+
+if [ "${DMG:-0}" = "1" ]; then
+    DMG_PATH="$DIR/target/release/JInk-$VERSION-macos.dmg"
+    STAGE="$(mktemp -d)"
+    cp -R "$APP_DIR" "$STAGE/"
+    ln -s /Applications "$STAGE/Applications"
+    rm -f "$DMG_PATH"
+    hdiutil create -volname "JInk $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG_PATH" >/dev/null
+    rm -rf "$STAGE"
+    echo "==> DMG: $DMG_PATH"
 fi
 
 echo "==> Successfully created $APP_DIR!"

@@ -71,6 +71,11 @@
   - Preset buttons for OpenAI (`gpt-4o-mini`), Ollama (`localhost:11434`), and OpenRouter.
   - "Paste API Key from Clipboard" button for one-click key configuration.
 
+## Release / packaging
+
+- Push an annotated tag `vX.Y.Z` (message = release notes) → `.github/workflows/release.yml` builds and publishes: macOS universal DMG (`UNIVERSAL=1 DMG=1 scripts/build-macos.sh`), Linux `.deb` + AppImage (`scripts/package-linux.sh`, Ubuntu 22.04). Version comes from `Cargo.toml`.
+- CI has no signing identity → macOS build is ad-hoc signed (users right-click → Open the first time).
+
 ## macOS Packaging (`scripts/build-macos.sh`)
 
 - Signed with the first `Apple Development`/`Developer ID` identity (override `JINK_SIGN_ID`, `-` = ad-hoc) and identifier `com.nhatcoi.jink`, so the designated requirement is stable. Ad-hoc = cdhash requirement → every rebuild silently loses Accessibility (selection capture + paste stop working). No hardened runtime (it would need the audio-input entitlement for the mic).
