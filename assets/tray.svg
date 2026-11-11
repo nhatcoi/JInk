@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" width="44" height="44">
+  <!-- menu bar template: black + alpha only, macOS tints it -->
+  <g fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.6">
+    <path d="M11 9.5 H22"/>
+    <path d="M18.5 9.5 V25.5 C18.5 31.5 15 34.5 10.8 34.5 C8 34.5 5.9 33.2 4.8 31"/>
+  </g>
+  <rect x="27" y="7" width="11" height="11" rx="2.2" fill="#000" transform="rotate(-8 32.5 12.5)"/>
+</svg>

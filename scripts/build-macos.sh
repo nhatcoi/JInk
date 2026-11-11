@@ -49,6 +49,10 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <string>1</string>
     <key>CFBundleIconFile</key>
     <string>icon.icns</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>JInk listens to your voice to turn speech into text.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>JInk turns what you say into text with the built-in speech recognizer.</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -58,6 +62,19 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
 </dict>
 </plist>
 EOF
+
+# Sign with a real identity so macOS privacy grants (Accessibility, Microphone, Speech)
+# survive rebuilds. Ad-hoc signatures are pinned to the binary hash, so every build
+# would look like a new app and silently lose Accessibility (no selection, no paste).
+# Override with JINK_SIGN_ID="<identity>"; set JINK_SIGN_ID=- to force ad-hoc.
+SIGN_ID="${JINK_SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+if [ -n "$SIGN_ID" ]; then
+    echo "==> Signing with $SIGN_ID..."
+    codesign --force --deep --sign "$SIGN_ID" --identifier com.nhatcoi.jink "$APP_DIR"
+else
+    echo "==> No signing identity found: ad-hoc signed, privacy grants reset on every rebuild."
+    codesign --force --deep --sign - --identifier com.nhatcoi.jink "$APP_DIR"
+fi
 
 echo "==> Successfully created $APP_DIR!"
 echo "You can launch it directly with: open $APP_DIR"

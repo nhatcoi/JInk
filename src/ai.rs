@@ -27,6 +27,60 @@ pub enum AiStreamEvent {
     Error(String),
 }
 
+/// Speech-to-text. Whisper-style models use `/audio/transcriptions`; any other model (e.g. a
+/// Gemini chat model) is sent the audio as an `input_audio` chat message instead, since many
+/// gateways serve no dedicated transcription endpoint.
+pub async fn transcribe(base_url: &str, api_key: &str, model: &str, wav: Vec<u8>) -> anyhow::Result<String> {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("whisper") || lower.contains("transcribe") {
+        transcribe_endpoint(base_url, api_key, model, wav).await
+    } else {
+        transcribe_via_chat(base_url, api_key, model, wav).await
+    }
+}
+
+async fn transcribe_endpoint(base_url: &str, api_key: &str, model: &str, wav: Vec<u8>) -> anyhow::Result<String> {
+    let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
+    let part = reqwest::multipart::Part::bytes(wav).file_name("audio.wav").mime_str("audio/wav")?;
+    let form = reqwest::multipart::Form::new()
+        .text("model", model.to_string())
+        .text("response_format", "json")
+        .part("file", part);
+    let resp = reqwest::Client::new().post(&url).bearer_auth(api_key).multipart(form).send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("HTTP {}: {}", status, text);
+    }
+    let json: Value = resp.json().await?;
+    Ok(json["text"].as_str().unwrap_or_default().trim().to_string())
+}
+
+async fn transcribe_via_chat(base_url: &str, api_key: &str, model: &str, wav: Vec<u8>) -> anyhow::Result<String> {
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&wav);
+    let body = json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Transcribe this audio exactly as spoken, in the language spoken. Return ONLY the transcript, nothing else. If there is no speech, return an empty string." },
+                { "type": "input_audio", "input_audio": { "data": b64, "format": "wav" } }
+            ]
+        }]
+    });
+    let resp = reqwest::Client::new().post(&url).bearer_auth(api_key).json(&body).send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("HTTP {}: {}", status, text);
+    }
+    let json: Value = resp.json().await?;
+    let text = json["choices"][0]["message"]["content"].as_str().unwrap_or_default();
+    Ok(strip_think_tags(text).trim().to_string())
+}
+
 pub async fn stream_chat(
     config: AiConfig,
     messages: Vec<ChatMessage>,
@@ -240,43 +294,77 @@ fn with_context(instruction: String, context: Option<&str>) -> String {
     }
 }
 
-pub fn enhance_prompt(text: &str, context: Option<&str>) -> Vec<ChatMessage> {
+pub const LANGS: [&str; 8] = ["en", "vi", "ja", "ko", "zh", "fr", "de", "es"];
+
+pub fn lang_name(code: &str) -> &str {
+    match code {
+        "en" => "English",
+        "vi" => "Vietnamese",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "zh" => "Chinese",
+        "fr" => "French",
+        "de" => "German",
+        "es" => "Spanish",
+        other => other,
+    }
+}
+
+/// Shared rule telling the model which two languages the user works in.
+fn lang_rule(a: &str, b: &str) -> String {
+    format!(
+        "The user works in two main languages: {} and {}. Detect which one the user's text is written in.",
+        lang_name(a),
+        lang_name(b)
+    )
+}
+
+/// Turn a rough idea into a clear, well-structured prompt for an AI assistant.
+pub fn enhance_prompt(text: &str, a: &str, b: &str, context: Option<&str>) -> Vec<ChatMessage> {
+    let sys = format!(
+        "You are a prompt engineer. {} Rewrite the user's rough request as a clear, specific, well-structured prompt for an AI assistant: state the goal, add the needed context and constraints, and the desired output format, but invent no facts and do not answer it. Write the prompt in the SAME language as the user's text. Return ONLY the prompt, no quotes, no explanation.",
+        lang_rule(a, b)
+    );
     vec![
-        ChatMessage {
-            role: "system".into(),
-            content: with_context("You are a writing assistant. Improve the user's text: fix grammar, spelling and clarity while preserving meaning, tone and language. Return ONLY the improved text, no quotes, no explanation.".into(), context),
-        },
-        ChatMessage {
-            role: "user".into(),
-            content: text.into(),
-        },
+        ChatMessage { role: "system".into(), content: with_context(sys, context) },
+        ChatMessage { role: "user".into(), content: text.into() },
     ]
 }
 
-pub fn translate_prompt(text: &str, from: &str, to: &str) -> Vec<ChatMessage> {
-    let instruction = if from == "auto" {
-        format!("Detect the source language and translate it to {to}.")
-    } else {
-        format!("Translate from {from} to {to}.")
-    };
+pub fn refine_prompt(text: &str, a: &str, b: &str, context: Option<&str>) -> Vec<ChatMessage> {
+    let sys = format!(
+        "You are a writing assistant. {} Improve the text: fix grammar, spelling, formatting and clarity while preserving meaning and tone. Reply in the SAME language as the text (never translate). Return ONLY the improved text, no quotes, no explanation.",
+        lang_rule(a, b)
+    );
     vec![
-        ChatMessage {
-            role: "system".into(),
-            content: format!("{instruction} Return ONLY the translation, no quotes, no explanation."),
-        },
-        ChatMessage {
-            role: "user".into(),
-            content: text.into(),
-        },
+        ChatMessage { role: "system".into(), content: with_context(sys, context) },
+        ChatMessage { role: "user".into(), content: text.into() },
     ]
 }
 
-pub fn explain_prompt(text: &str, lang: &str, context: Option<&str>) -> Vec<ChatMessage> {
+/// Translate between the two main languages: A -> B, B -> A, anything else -> A.
+pub fn translate_prompt(text: &str, a: &str, b: &str) -> Vec<ChatMessage> {
+    let sys = format!(
+        "{} If the text is in {}, translate it to {}. If it is in {}, translate it to {}. If it is in any other language, translate it to {}. Return ONLY the translation, no quotes, no explanation.",
+        lang_rule(a, b),
+        lang_name(a), lang_name(b),
+        lang_name(b), lang_name(a),
+        lang_name(a)
+    );
     vec![
-        ChatMessage {
-            role: "system".into(),
-            content: with_context(format!("You are a concise explainer. Explain the meaning of the word, sentence, or concept the user sends. Answer in {lang} if you are fluent in it; otherwise answer in English. Be brief: 1-3 short sentences, no preamble, no quotes."), context),
-        },
+        ChatMessage { role: "system".into(), content: sys },
+        ChatMessage { role: "user".into(), content: text.into() },
+    ]
+}
+
+pub fn explain_prompt(text: &str, a: &str, b: &str, context: Option<&str>) -> Vec<ChatMessage> {
+    let sys = format!(
+        "You are a concise explainer. {} Explain the meaning of the word, sentence, or concept the user sends. Answer in the SAME language as the user's text; if it is in neither language, answer in {}. Be brief: 1-3 short sentences, no preamble, no quotes.",
+        lang_rule(a, b),
+        lang_name(a)
+    );
+    vec![
+        ChatMessage { role: "system".into(), content: with_context(sys, context) },
         ChatMessage {
             role: "user".into(),
             content: if text.is_empty() { "Explain this.".into() } else { text.into() },

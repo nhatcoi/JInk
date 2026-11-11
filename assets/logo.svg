@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="ink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26221c"/>
+      <stop offset="1" stop-color="#0e0c0a"/>
+    </linearGradient>
+    <linearGradient id="seal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ef6a4c"/>
+      <stop offset="1" stop-color="#cc4329"/>
+    </linearGradient>
+    <linearGradient id="paper" gradientUnits="userSpaceOnUse" x1="0" y1="260" x2="0" y2="820">
+      <stop offset="0" stop-color="#f6f0e2"/>
+      <stop offset="1" stop-color="#e2d9c5"/>
+    </linearGradient>
+  </defs>
+  <!-- ink squircle (Apple 824/1024 grid) -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#ink)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="3"/>
+  <!-- J: caret cap + stem + hook -->
+  <g fill="none" stroke="url(#paper)" stroke-linecap="round" stroke-linejoin="round" stroke-width="104">
+    <path d="M384 318 H566"/>
+    <path d="M514 318 V600 C514 712 448 768 368 768 C314 768 274 744 252 700"/>
+  </g>
+  <!-- vermilion seal -->
+  <g transform="rotate(-8 738 338)">
+    <rect x="668" y="268" width="140" height="140" rx="26" fill="url(#seal)"/>
+    <rect x="692" y="292" width="92" height="92" rx="12" fill="none" stroke="#13110e" stroke-opacity="0.35" stroke-width="10"/>
+  </g>
+</svg>

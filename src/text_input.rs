@@ -19,10 +19,10 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::Theme;
 
-/// Inner wrap width: popup 560 - 2*20 padding - 2*1 border.
-pub const WRAP_WIDTH: f32 = 486.0;
-/// Max visible text height before the field scrolls.
-pub const MAX_HEIGHT: f32 = 132.0;
+/// Inner wrap width: popup 680 - 2*20 padding - 2*1 border.
+pub const WRAP_WIDTH: f32 = 606.0;
+/// Max visible text height before the field scrolls (~14 lines; popup grows up to here).
+pub const MAX_HEIGHT: f32 = 308.0;
 const TYPING_COALESCE: Duration = Duration::from_millis(900);
 const UNDO_LIMIT: usize = 200;
 
@@ -299,6 +299,7 @@ impl TextInput {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     pub fn append_silent(&mut self, text: &str, cx: &mut Context<Self>) {
         self.content.push_str(text);
         let end = self.content.len();
@@ -1291,7 +1292,7 @@ impl Element for TextElement {
             cx,
         );
 
-        let (lines, tops, lh, scroll, placeholder) = {
+        let (lines, tops, lh, scroll, placeholder, total) = {
             let i = self.input.read(cx);
             (
                 i.lines.clone(),
@@ -1299,6 +1300,7 @@ impl Element for TextElement {
                 i.line_height,
                 i.scroll_y,
                 i.placeholder_line.clone(),
+                i.total_height,
             )
         };
 
@@ -1319,6 +1321,16 @@ impl Element for TextElement {
                 }
             }
         });
+
+        // Thin scrollbar on the right edge once the text overflows.
+        let view = bounds.size.height;
+        if total > view + px(1.) {
+            let thumb_h = (view * (view / total)).max(px(24.));
+            let max_scroll = total - view;
+            let thumb_y = bounds.top() + (view - thumb_h) * (scroll / max_scroll).clamp(0., 1.);
+            let thumb = Bounds::new(point(bounds.right() + px(6.), thumb_y), size(px(3.), thumb_h));
+            window.paint_quad(fill(thumb, gpui::rgba(0xffffff38)).corner_radii(px(1.5)));
+        }
 
         self.input.update(cx, |i, _| i.last_bounds = Some(bounds));
     }

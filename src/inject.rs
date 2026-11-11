@@ -12,7 +12,7 @@
 // themselves (Claude Code) act on; Codex/agy ignore it. So text goes through
 // ctrl+shift+v there. Images stay on ctrl+v: the terminal can't paste an image,
 // but the CLI reads it from the clipboard on ^V.
-// macOS / Windows: enigo paste.
+// macOS: CoreGraphics Cmd+V. Windows: enigo Ctrl+V.
 use std::{borrow::Cow, thread, time::Duration};
 
 pub enum Part {
@@ -174,27 +174,26 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
     Ok(())
 }
 
-/// macOS / Windows: simulate the paste shortcut with enigo.
-#[cfg(not(target_os = "linux"))]
+/// macOS: Cmd+V through CoreGraphics (enigo traps when used off the main thread).
+#[cfg(target_os = "macos")]
 fn paste() -> Result<(), String> {
-    eprintln!("[jink] paste()");
+    crate::mac_keys::cmd_key(crate::mac_keys::KEY_V)
+}
+
+/// Windows: simulate Ctrl+V with enigo.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn paste() -> Result<(), String> {
     use enigo::{
         Direction::{Click, Press, Release},
         Enigo, Key, Keyboard, Settings as EnigoSettings,
     };
 
     let mut enigo = Enigo::new(&EnigoSettings::default()).map_err(|e| e.to_string())?;
-
-    #[cfg(target_os = "macos")]
-    let modifier = Key::Meta;
-    #[cfg(not(target_os = "macos"))]
-    let modifier = Key::Control;
-
-    enigo.key(modifier, Press).map_err(|e| e.to_string())?;
+    enigo.key(Key::Control, Press).map_err(|e| e.to_string())?;
     enigo
         .key(Key::Unicode('v'), Click)
         .map_err(|e| e.to_string())?;
-    enigo.key(modifier, Release).map_err(|e| e.to_string())?;
+    enigo.key(Key::Control, Release).map_err(|e| e.to_string())?;
     Ok(())
 }
 

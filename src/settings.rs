@@ -29,14 +29,25 @@ pub struct Settings {
     pub selection_context: bool,
     pub popup_x: Option<f32>,
     pub popup_y: Option<f32>,
+    pub ui_lang: String,
+    /// The two main languages AI actions work in (codes, see `ai::lang_name`).
+    pub lang_a: String,
+    pub lang_b: String,
+    /// Speech-to-text model for the microphone button.
+    pub stt_model: String,
 }
+
+/// Per-OS hotkey presets (label, value); the first one is the default.
+#[cfg(target_os = "macos")]
+pub const HOTKEY_PRESETS: &[(&str, &str)] = &[("Ctrl+Space", "Control+Space"), ("Ctrl+Cmd+Space", "Control+Cmd+Space")];
+#[cfg(target_os = "linux")]
+pub const HOTKEY_PRESETS: &[(&str, &str)] = &[("Super+Space", "Super+Space"), ("Ctrl+Space", "Control+Space")];
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub const HOTKEY_PRESETS: &[(&str, &str)] = &[("Ctrl+Space", "Control+Space"), ("Alt+Space", "Alt+Space")];
 
 impl Default for Settings {
     fn default() -> Self {
-        #[cfg(target_os = "linux")]
-        let hotkey = "Super+Space".to_string();
-        #[cfg(not(target_os = "linux"))]
-        let hotkey = "Control+Cmd+Space".to_string();
+        let hotkey = HOTKEY_PRESETS[0].1.to_string();
 
         Self {
             ai_base_url: "https://api.openai.com/v1".to_string(),
@@ -56,6 +67,10 @@ impl Default for Settings {
             selection_context: true,
             popup_x: None,
             popup_y: None,
+            ui_lang: "en".to_string(),
+            lang_a: "en".to_string(),
+            lang_b: "vi".to_string(),
+            stt_model: "whisper-1".to_string(),
         }
     }
 }

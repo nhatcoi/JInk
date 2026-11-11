@@ -1,7 +1,14 @@
 mod ai;
+mod i18n;
+mod mic;
 mod inject;
+#[cfg(target_os = "macos")]
+mod mac_keys;
 mod popup;
+mod selection;
 mod settings;
+mod stt;
+mod speech;
 mod text_input;
 mod theme;
 
@@ -95,42 +102,44 @@ done; done"#;
     let _ = cmd.spawn();
 }
 
-// PRIMARY selection = text highlighted in the previously focused app
-#[cfg(target_os = "linux")]
-fn selected_text() -> Option<String> {
-    use arboard::{GetExtLinux, LinuxClipboardKind};
-    let text = arboard::Clipboard::new()
-        .ok()?
-        .get()
-        .clipboard(LinuxClipboardKind::Primary)
-        .text()
-        .ok()?;
-    let text = text.trim_end().to_string();
-    (!text.is_empty()).then_some(text)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn selected_text() -> Option<String> {
-    None
-}
-
 fn open_popup(cx: &mut App) {
-    let popup_size = size(px(560.0), px(118.0));
+    let popup_size = size(px(680.0), px(118.0));
+    trace("open_popup:start");
     let settings = settings::load_settings();
-    let selection = if settings.prefill_selection || settings.selection_context { selected_text() } else { None };
-    let (initial_text, context) = if settings.prefill_selection { (selection, None) } else { (None, selection) };
-    let anchor = if settings.follow_cursor {
-        cursor_position().map(|c| Point::new(c.x + px(12.0), c.y + px(16.0)))
-    } else {
-        settings.popup_x.zip(settings.popup_y).map(|(x, y)| Point::new(px(x), px(y)))
+    trace("settings:loaded");
+    // Selection must never delay the popup: take it now only if it is instant (AX /
+    // PRIMARY); otherwise show the popup unfocused, copy in the background while the
+    // target app still has focus, then attach the result and take focus.
+    let wants_selection = settings.prefill_selection || settings.selection_context;
+    let (selection, slow_selection) = match wants_selection.then(selection::fast) {
+        Some(selection::Fast::Done(text)) => (text, false),
+        Some(selection::Fast::Slow) => (None, true),
+        None => (None, false),
+    };
+    trace(&format!("selection:fast slow={slow_selection} chars={}", selection.as_ref().map_or(0, |t| t.chars().count())));
+    let prefill = settings.prefill_selection;
+    let (initial_text, context) = if prefill { (selection, None) } else { (None, selection) };
+    let cursor = if settings.follow_cursor { cursor_position() } else { None };
+    let anchor = match cursor {
+        Some(c) => Some(Point::new(c.x + px(12.0), c.y + px(16.0))),
+        None => settings.popup_x.zip(settings.popup_y).map(|(x, y)| Point::new(px(x), px(y))),
     };
     let bounds = match anchor {
         Some(mut origin) => {
-            // keep the popup on a display (settings panel growth included)
-            let max_h = px(410.0);
-            if let Some(area) = cx.displays().into_iter().map(|d| d.bounds()).find(|d| d.contains(&origin)) {
+            let find = |p: &Point<Pixels>| cx.displays().into_iter().map(|d| d.bounds()).find(|d| d.contains(p));
+            if let Some(area) = find(&origin).or_else(|| cursor.and_then(|c| find(&c))) {
                 origin.x = origin.x.min(area.right() - popup_size.width).max(area.left());
-                origin.y = origin.y.min(area.bottom() - max_h).max(area.top());
+                if let Some(c) = cursor {
+                    // follow cursor: stay just below the pointer; if that would run off the
+                    // bottom edge, sit just above it instead of jumping far away.
+                    if origin.y + popup_size.height > area.bottom() {
+                        origin.y = c.y - px(16.0) - popup_size.height;
+                    }
+                    origin.y = origin.y.max(area.top());
+                } else {
+                    // saved position: leave room for the settings panel growing
+                    origin.y = origin.y.min(area.bottom() - px(500.0)).max(area.top());
+                }
             }
             Bounds::new(origin, popup_size)
         }
@@ -155,18 +164,39 @@ fn open_popup(cx: &mut App) {
         window_decorations: Some(WindowDecorations::Client),
         #[cfg(not(target_os = "linux"))]
         kind: WindowKind::PopUp,
+        focus: !slow_selection,
         ..Default::default()
     };
 
+    trace("open_window:begin");
     if let Ok(handle) = cx.open_window(window_options, |window, cx| {
         let popup = cx.new(|cx| JInkPopup::new(initial_text, context, window, cx));
-        let input_handle = popup.read(cx).input.focus_handle(cx);
-        window.activate_window();
         #[cfg(target_os = "linux")]
         place_x11_popup(placed_at);
-        window.focus(&input_handle);
+        if !slow_selection {
+            let input_handle = popup.read(cx).input.focus_handle(cx);
+            window.activate_window();
+            window.focus(&input_handle);
+        }
         popup
     }) {
+        trace("open_window:end");
+        if slow_selection {
+            let task = cx.background_executor().spawn(async { selection::slow() });
+            cx.spawn(async move |cx| {
+                let text = task.await;
+                trace(&format!("selection:slow chars={}", text.as_ref().map_or(0, |t| t.chars().count())));
+                let _ = handle.update(cx, |popup, window, cx| {
+                    if let Some(text) = text {
+                        popup.attach_selection(text, prefill, cx);
+                    }
+                    let input_handle = popup.input.focus_handle(cx);
+                    window.activate_window();
+                    window.focus(&input_handle);
+                });
+            })
+            .detach();
+        }
         if let Ok(mut guard) = POPUP_WINDOW.lock() {
             *guard = Some(handle.into());
         }
@@ -189,6 +219,103 @@ fn toggle_popup(cx: &mut App) {
 
     if !is_open {
         open_popup(cx);
+    }
+}
+
+/// Menu bar actions: open the popup (or bring the open one forward), optionally on Settings.
+#[cfg(target_os = "macos")]
+fn show_popup(cx: &mut App, settings_view: bool) {
+    let existing = POPUP_WINDOW
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .filter(|h| cx.windows().contains(h));
+    if existing.is_none() {
+        open_popup(cx);
+    }
+    let handle = POPUP_WINDOW.lock().ok().and_then(|g| *g);
+    if let Some(handle) = handle.and_then(|h| h.downcast::<JInkPopup>()) {
+        let _ = handle.update(cx, |popup, window, cx| {
+            if settings_view {
+                popup.active_view = popup::ActiveView::Settings;
+                cx.notify();
+            }
+            window.activate_window();
+        });
+    }
+}
+
+/// Menu bar icon + hiding the Dock icon. gpui forces the Regular activation policy at
+/// launch (overriding `LSUIElement`), so we switch back to Accessory once it has run.
+#[cfg(target_os = "macos")]
+mod mac_tray {
+    #![allow(unexpected_cfgs)]
+    use objc::{class, msg_send, sel, sel_impl};
+    use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tray_icon::{Icon, TrayIconBuilder};
+
+    pub const OPEN: &str = "jink.open";
+    pub const SETTINGS: &str = "jink.settings";
+    pub const QUIT: &str = "jink.quit";
+
+    pub fn hide_dock_icon() {
+        unsafe {
+            let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
+            let _: bool = msg_send![app, setActivationPolicy: 1i64]; // Accessory
+        }
+    }
+
+    /// Selection capture, paste injection and the Ctrl+Cmd chord all need Accessibility.
+    /// Without it they fail silently, so ask macOS to show its grant prompt on launch.
+    pub fn ensure_accessibility() {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
+            static kAXTrustedCheckOptionPrompt: *const std::ffi::c_void;
+        }
+        unsafe {
+            let yes: *mut objc::runtime::Object = msg_send![class!(NSNumber), numberWithBool: true];
+            let opts: *mut objc::runtime::Object = msg_send![class!(NSDictionary),
+                dictionaryWithObject: yes forKey: kAXTrustedCheckOptionPrompt];
+            let trusted = AXIsProcessTrustedWithOptions(opts as *const _);
+            crate::trace(&format!("accessibility:trusted={trusted}"));
+        }
+    }
+
+    pub fn install(lang: &str, hotkey: &str) {
+        let vi = lang == "vi";
+        let png = include_bytes!("../assets/icons/tray@2x.png");
+        let img = match image::load_from_memory(png) {
+            Ok(i) => i,
+            Err(e) => return crate::trace(&format!("tray:image_err {e}")),
+        };
+        let img = img.into_rgba8();
+        let (w, h) = img.dimensions();
+        let icon = match Icon::from_rgba(img.into_raw(), w, h) {
+            Ok(i) => i,
+            Err(e) => return crate::trace(&format!("tray:icon_err {e}")),
+        };
+
+        let menu = Menu::new();
+        let open = format!("{}   {hotkey}", if vi { "Mở JInk" } else { "Open JInk" });
+        let _ = menu.append_items(&[
+            &MenuItem::with_id(OPEN, open, true, None),
+            &MenuItem::with_id(SETTINGS, if vi { "Cài đặt…" } else { "Settings…" }, true, None),
+            &PredefinedMenuItem::separator(),
+            &MenuItem::with_id(QUIT, if vi { "Thoát JInk" } else { "Quit JInk" }, true, None),
+        ]);
+        let tray = TrayIconBuilder::new()
+            .with_icon_templated(icon)
+            .with_tooltip("JInk")
+            // remember where the user drags it
+            .with_autosave_name("JInkMenuBarIcon")
+            .with_menu(Box::new(menu))
+            .build();
+        // the icon disappears when dropped; it lives as long as the app
+        match tray {
+            Ok(tray) => std::mem::forget(tray),
+            Err(e) => crate::trace(&format!("tray:build_err {e}")),
+        }
     }
 }
 
@@ -228,7 +355,7 @@ fn parse_or_default_hotkey(hotkey_str: &str) -> HotKey {
     if let Ok(hk) = hotkey_str.parse::<HotKey>() {
         return hk;
     }
-    // Nếu chuỗi chỉ có modifiers (ví dụ "Control+Cmd" hay "Ctrl+Cmd"), bổ sung thêm phím Space
+    // modifiers only ("Control+Cmd"): default the key to Space
     let with_space = format!("{}+Space", hotkey_str.trim_end_matches('+'));
     if let Ok(hk) = with_space.parse::<HotKey>() {
         return hk;
@@ -318,7 +445,6 @@ mod macos_chord {
                 if !KEY_PRESSED.load(Ordering::SeqCst) {
                     let start = CHORD_START.lock().ok().and_then(|mut g| g.take());
                     if let Some(start) = start {
-                        // Nhấn nhả Control + Cmd trong khoảng 800ms
                         if start.elapsed() < std::time::Duration::from_millis(800) {
                             if let Ok(guard) = SENDER.lock() {
                                 if let Some(ref tx) = *guard {
@@ -358,6 +484,17 @@ mod macos_chord {
     }
 }
 
+/// Debug timing: `JINK_TRACE=/path/file` appends `<epoch_ms> <tag>` lines.
+pub fn trace(tag: &str) {
+    if let Some(path) = std::env::var_os("JINK_TRACE") {
+        use std::io::Write;
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{ms:.1} {tag}");
+        }
+    }
+}
+
 /// Shared Tokio runtime: reqwest needs one, GPUI's executors are not Tokio.
 pub fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
@@ -382,6 +519,8 @@ impl AssetSource for Assets {
             "svg/help.svg" => include_bytes!("../assets/svg/help.svg"),
             "svg/settings.svg" => include_bytes!("../assets/svg/settings.svg"),
             "svg/undo.svg" => include_bytes!("../assets/svg/undo.svg"),
+            "svg/mic.svg" => include_bytes!("../assets/svg/mic.svg"),
+            "svg/volume.svg" => include_bytes!("../assets/svg/volume.svg"),
             _ => return Ok(None),
         };
         Ok(Some(std::borrow::Cow::Borrowed(bytes)))
@@ -413,8 +552,18 @@ fn main() {
     #[cfg(target_os = "macos")]
     macos_chord::start_chord_listener(chord_tx);
 
+    #[cfg(target_os = "macos")]
+    let (tray_lang, tray_hotkey) = (settings.ui_lang.clone(), settings.hotkey.clone());
+
     Application::new().with_assets(Assets).run(move |cx| {
         text_input::bind_keys(cx);
+
+        #[cfg(target_os = "macos")]
+        {
+            mac_tray::hide_dock_icon();
+            mac_tray::install(&tray_lang, &tray_hotkey);
+            mac_tray::ensure_accessibility();
+        }
 
         #[cfg(target_os = "linux")]
         {
@@ -432,21 +581,29 @@ fn main() {
             });
         }
 
-        // Mở popup ngay khi khởi động
         open_popup(cx);
 
-        // Vòng lặp lắng nghe phím tắt toàn cục bất đồng bộ (Non-blocking async timer)
         cx.spawn(async move |cx| {
             loop {
-                // Yield to event loop, sleep 30ms không bao giờ làm block main thread
-                cx.background_executor().timer(std::time::Duration::from_millis(30)).await;
+                cx.background_executor().timer(std::time::Duration::from_millis(8)).await;
 
                 while let Ok(event) = receiver.try_recv() {
                     if event.state == global_hotkey::HotKeyState::Pressed {
+                        trace("hotkey:recv");
                         let _ = cx.update(|cx| {
                             toggle_popup(cx);
                         });
                     }
+                }
+
+                #[cfg(target_os = "macos")]
+                while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+                    let _ = cx.update(|cx| match event.id.0.as_str() {
+                        mac_tray::OPEN => show_popup(cx, false),
+                        mac_tray::SETTINGS => show_popup(cx, true),
+                        mac_tray::QUIT => cx.quit(),
+                        _ => {}
+                    });
                 }
 
                 #[cfg(target_os = "macos")]
