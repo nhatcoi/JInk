@@ -1,4 +1,4 @@
-//! Read text aloud with the OS speech engine (no extra dependencies, works offline).
+//! Read text aloud: OS speech engine (macOS `say`, Windows none), Linux uses Edge neural voices with espeak as offline fallback.
 //! Each OS has its own module so a fix for one cannot break the other.
 
 use std::process::Child;
@@ -107,20 +107,120 @@ mod imp {
 
 #[cfg(target_os = "linux")]
 mod imp {
+    use msedge_tts::tts::{client::connect, SpeechConfig};
+    use std::io::Write;
     use std::process::{Child, Command, Stdio};
 
-    pub fn spawn(text: &str, lang: &str) -> Option<Child> {
+    const PLAYERS: [(&str, &[&str]); 3] =
+        [("paplay", &[]), ("pw-play", &["-"]), ("aplay", &["-q"])];
+
+    fn edge_voice(lang: &str) -> &'static str {
+        match lang {
+            "vi" => "vi-VN-HoaiMyNeural",
+            "ja" => "ja-JP-NanamiNeural",
+            "ko" => "ko-KR-SunHiNeural",
+            "zh" => "zh-CN-XiaoxiaoNeural",
+            _ => "en-US-AriaNeural",
+        }
+    }
+
+    fn synthesize(text: &str, lang: &str) -> anyhow::Result<Vec<u8>> {
+        let config = SpeechConfig {
+            voice_name: edge_voice(lang).to_string(),
+            audio_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
+            pitch: 0,
+            rate: 0,
+            volume: 0,
+        };
+        // Edge resets the first connection now and then; a second try goes through
+        let audio = connect()?.synthesize(text, &config).or_else(|_| connect()?.synthesize(text, &config))?;
+        mp3_to_wav(audio.audio_bytes)
+    }
+
+    // Edge only serves mp3; players like paplay/aplay need WAV, so decode in-process.
+    fn mp3_to_wav(mp3: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        let mut decoder = minimp3::Decoder::new(std::io::Cursor::new(mp3));
+        let (mut pcm, mut rate, mut channels) = (Vec::new(), 24000u32, 1u16);
+        loop {
+            match decoder.next_frame() {
+                Ok(frame) => {
+                    rate = frame.sample_rate as u32;
+                    channels = frame.channels as u16;
+                    pcm.extend(frame.data.iter().flat_map(|s| s.to_le_bytes()));
+                }
+                Err(minimp3::Error::Eof) => break,
+                Err(err) => return Err(anyhow::anyhow!("mp3 decode: {err}")),
+            }
+        }
+        let data_len = pcm.len() as u32;
+        let mut wav = Vec::with_capacity(pcm.len() + 44);
+        wav.extend(b"RIFF");
+        wav.extend((36 + data_len).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(channels.to_le_bytes());
+        wav.extend(rate.to_le_bytes());
+        wav.extend((rate * channels as u32 * 2).to_le_bytes());
+        wav.extend((channels * 2).to_le_bytes());
+        wav.extend(16u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend(data_len.to_le_bytes());
+        wav.extend(pcm);
+        Ok(wav)
+    }
+
+    fn espeak(text: &str, lang: &str) -> Option<Child> {
         let quiet = |mut c: Command| {
             c.stdout(Stdio::null()).stderr(Stdio::null());
             c
         };
-        // espeak-ng covers vi/ja/ko/zh/en; spd-say is the fallback
         for bin in ["espeak-ng", "espeak"] {
             if let Ok(child) = quiet(Command::new(bin)).args(["-v", lang, "--", text]).spawn() {
                 return Some(child);
             }
         }
         quiet(Command::new("spd-say")).args(["-w", "-l", lang, "--", text]).spawn().ok()
+    }
+
+    fn spawn_player() -> Option<Child> {
+        PLAYERS.iter().find_map(|(bin, args)| {
+            Command::new(bin)
+                .args(*args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()
+        })
+    }
+
+    // Edge neural voice streamed into a WAV player; the player child stays the "speaking" handle
+    // so stop() still kills it. Offline or no player: espeak replaces it.
+    pub fn spawn(text: &str, lang: &str) -> Option<Child> {
+        let Some(mut player) = spawn_player() else {
+            return espeak(text, lang);
+        };
+        let mut stdin = player.stdin.take()?;
+        let (text, lang, pid) = (text.to_string(), lang.to_string(), player.id());
+        std::thread::spawn(move || match synthesize(&text, &lang) {
+            Ok(wav) => {
+                let _ = stdin.write_all(&wav);
+            }
+            Err(err) => {
+                eprintln!("[jink] edge tts failed: {err}");
+                drop(stdin);
+                let mut current = super::CURRENT.lock().unwrap();
+                if current.as_ref().is_some_and(|c| c.id() == pid) {
+                    if let Some(mut old) = current.take() {
+                        let _ = old.kill();
+                        let _ = old.wait();
+                    }
+                    *current = espeak(&text, &lang);
+                }
+            }
+        });
+        Some(player)
     }
 }
 

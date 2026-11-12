@@ -103,7 +103,7 @@
 
 ## Read aloud (`src/speech.rs`)
 
-- `Cmd/Ctrl+L` / speaker ("loud") icon reads the translate/explain card, else the input, else the selected context; again to stop. Header bar and translation card have a dedicated speaker button that lights up vermilion while speaking (`speech::is_speaking()`). OS speech engine, one module per OS: macOS `say` (voice by script: Linh/Kyoko/Yuna/Tingting, falls back to default; starts with `[[slnc 800]]` lead silence for Bluetooth speakers), Linux `espeak-ng`/`espeak` then `spd-say`, Windows none. Language is detected from the script.
+- `Cmd/Ctrl+L` / speaker ("loud") icon reads the translate/explain card, else the input, else the selected context; again to stop. Header bar and translation card have a dedicated speaker button that lights up vermilion while speaking (`speech::is_speaking()`). OS speech engine, one module per OS: macOS `say` (voice by script: Linh/Kyoko/Yuna/Tingting, falls back to default; starts with `[[slnc 800]]` lead silence for Bluetooth speakers), Linux Edge neural voices (`msedge-tts`, mp3 decoded with `minimp3` to WAV, piped to `paplay`/`pw-play`/`aplay`; vi=HoaiMy, en=Aria; offline/failure falls back to `espeak-ng`/`espeak`/`spd-say`), Windows none. Language is detected from the script.
 
 ## Microphone & continuous voice-to-text (`src/mic.rs`, `src/stt.rs`)
 

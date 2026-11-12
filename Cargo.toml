@@ -31,6 +31,8 @@ block = "0.1"
 enigo = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+msedge-tts = "0.4"
+minimp3 = "0.5"
 tray-icon = { version = "0.26", features = ["libappindicator"] }
 
 [profile.release]
