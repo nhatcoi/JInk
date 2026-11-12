@@ -828,6 +828,7 @@ impl Render for JInkPopup {
             .bg(Theme::pill_bg())
             .border_1()
             .border_color(Theme::glass_edge())
+            .rounded(px(12.0))
             .overflow_hidden()
             // vermilion spine
             .child(div().w(px(3.0)).flex_none().bg(Theme::seal()))

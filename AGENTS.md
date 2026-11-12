@@ -31,7 +31,7 @@
 - Click-outside: 120ms poll of `window.is_window_active()` (gpui 0.2.2 has no activation observer); closes on active→inactive when `hide_on_blur` (toggle in settings), skipped while our file dialog is open.
 - Drag: header (JINK wordmark/status) `mouse_down` → `window.start_window_move()`; `moving_since` pauses click-outside because the WM drops activation during a move.
 - Linux window: `WindowKind::Normal` + `WindowDecorations::Client` (gpui `PopUp` = X11 NOTIFICATION type, KWin never keeps keyboard focus on it; Normal gets a KWin titlebar unless client decorations). KWin ignores the requested position, so `place_x11_popup` (xdotool/wmctrl) moves it to the chosen origin, pins above/skip-taskbar and focuses it after open.
-- Linux: opaque window + opaque `pill_bg` (no reliable X11 blur → unreadable over terminals). Ctrl+Shift+T = reverse translate.
+- Linux: transparent window + opaque `pill_bg` with `rounded(12px)` corners (no reliable X11 blur → unreadable over terminals). `place_x11_popup` sets `_NET_WM_WINDOW_OPACITY` 0 until the window is mapped and moved, hiding KWin's centered first frame. Ctrl+Shift+T = reverse translate.
 - Not ported from main yet: image/clipboard-helper exemption for blur.
 
 ## Text injection (`src/inject.rs`)

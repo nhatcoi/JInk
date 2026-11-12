@@ -83,17 +83,24 @@ impl Render for KeeperView {
 
 // KWin ignores the requested position of a Normal window and gpui's X11 window_handle() is
 // unimplemented: find our widest window (not the 1px keeper) via xdotool, then place/pin/focus it.
-// 20ms poll: slower polling lets KWin show the window at its own spot (centered) before the move.
+// opacity 0 until moved: KWin maps the window centered first, the compositor hides that frame.
 #[cfg(target_os = "linux")]
 pub fn place_x11_popup(origin: Option<(i32, i32)>) {
-    let script = r#"for i in $(seq 100); do sleep 0.02
+    let script = r#"hidden=
+for i in $(seq 200); do sleep 0.01
 for w in $(xdotool search --pid $PID_JINK); do
 eval $(xdotool getwindowgeometry --shell $w)
 [ "$WIDTH" -gt 1 ] || continue
-[ -n "$JINK_X" ] && xdotool windowmove $w $JINK_X $JINK_Y
-[ -n "$JINK_X" ] && wmctrl -i -r $w -b add,above,skip_taskbar,skip_pager
+if [ -n "$JINK_X" ]; then
+[ -z "$hidden" ] && xprop -id $w -f _NET_WM_WINDOW_OPACITY 32c -set _NET_WM_WINDOW_OPACITY 0 && hidden=1
+xdotool search --onlyvisible --pid $PID_JINK | grep -qx $w || continue
+xdotool windowmove $w $JINK_X $JINK_Y
+wmctrl -i -r $w -b add,above,skip_taskbar,skip_pager
+xprop -id $w -remove _NET_WM_WINDOW_OPACITY
+fi
 xdotool windowfocus $w && exit 0
-done; done"#;
+done; done
+[ -n "$hidden" ] && xprop -id $w -remove _NET_WM_WINDOW_OPACITY"#;
     let mut cmd = std::process::Command::new("sh");
     cmd.args(["-c", script]).stderr(std::process::Stdio::null()).env("PID_JINK", std::process::id().to_string());
     if let Some((x, y)) = origin {
@@ -153,7 +160,7 @@ fn open_popup(cx: &mut App) {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
         #[cfg(target_os = "linux")]
-        window_background: WindowBackgroundAppearance::Opaque,
+        window_background: WindowBackgroundAppearance::Transparent,
         #[cfg(not(target_os = "linux"))]
         window_background: WindowBackgroundAppearance::Blurred,
         // X11 PopUp = NOTIFICATION window type: KWin never keeps keyboard focus on it
