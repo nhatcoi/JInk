@@ -40,6 +40,7 @@
 - **Linux**: paste via `xdotool key --clearmodifiers`. Terminal detection checks `WM_CLASS` to use `ctrl+shift+v` for terminals and `ctrl+v` elsewhere.
 - **macOS**: clipboard runs + Cmd+V posted via CoreGraphics (`src/mac_keys.rs`; enigo traps with SIGTRAP off the main thread). **Windows**: `enigo` Ctrl+V.
 - On inject, popup closes immediately, giving focus back to the target app before injecting.
+- Auto-send: `settings.auto_send` (off by default, toggle in Settings) makes Enter/INSERT press Return in the target app after the last paste (`inject_text(.., send)`, `press_enter` per OS); `Ctrl/Cmd+Shift+Enter` does inject + Return once regardless of the toggle.
 
 ## Popup show/hide & focus (`src/main.rs`)
 

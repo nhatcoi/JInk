@@ -14,6 +14,8 @@ pub fn tr(lang: &str, key: &'static str) -> &'static str {
         ("follow", true) => "Theo con trỏ",
         ("blur", false) => "Close on click outside",
         ("blur", true) => "Tự đóng khi click ngoài",
+        ("autosend", false) => "Press Enter after inserting",
+        ("autosend", true) => "Tự nhấn Enter sau khi chèn",
         ("context", false) => "Selection as context",
         ("context", true) => "Dùng vùng chọn làm ngữ cảnh",
         ("prefill", false) => "Prefill selection",

@@ -13,6 +13,7 @@ extern "C" {
 const CMD_FLAG: u64 = 0x0010_0000;
 pub const KEY_C: u16 = 8;
 pub const KEY_V: u16 = 9;
+const KEY_RETURN: u16 = 36;
 
 /// Press and release Cmd+<key> in the focused app.
 pub fn cmd_key(keycode: u16) -> Result<(), String> {
@@ -24,6 +25,21 @@ pub fn cmd_key(keycode: u16) -> Result<(), String> {
             }
             CGEventSetFlags(ev, CMD_FLAG);
             CGEventPost(0, ev); // kCGHIDEventTap
+            CFRelease(ev);
+        }
+    }
+    Ok(())
+}
+
+/// Press and release Return in the focused app.
+pub fn return_key() -> Result<(), String> {
+    unsafe {
+        for down in [true, false] {
+            let ev = CGEventCreateKeyboardEvent(std::ptr::null(), KEY_RETURN, down);
+            if ev.is_null() {
+                return Err("could not create key event".into());
+            }
+            CGEventPost(0, ev);
             CFRelease(ev);
         }
     }

@@ -94,7 +94,7 @@ impl JInkPopup {
         Self::watch_click_outside(window, cx);
         let sub = cx.subscribe_in(&input, window, |this, _, event: &TextInputEvent, window, cx| {
             match event {
-                TextInputEvent::Submit => this.trigger_inject(window, cx),
+                TextInputEvent::Submit => this.trigger_inject(this.settings.auto_send, window, cx),
                 TextInputEvent::UndoEmpty => this.undo_ai(cx),
                 TextInputEvent::PasteImage => this.paste_clipboard_image(window, cx),
                 TextInputEvent::Changed => {
@@ -308,7 +308,7 @@ impl JInkPopup {
         self.input.read(cx).text().to_string()
     }
 
-    pub fn trigger_inject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn trigger_inject(&mut self, send: bool, window: &mut Window, cx: &mut Context<Self>) {
         let mut to_inject = self.translation.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| self.current_text(cx));
         let files: Vec<&str> = self.attachments.iter().filter(|a| a.image_index.is_none()).map(|a| a.path.as_str()).collect();
         if !files.is_empty() {
@@ -328,7 +328,7 @@ impl JInkPopup {
         window.remove_window();
 
         std::thread::spawn(move || {
-            let _ = inject::inject_text(&to_inject, &images);
+            let _ = inject::inject_text(&to_inject, &images, send);
         });
     }
 
@@ -808,6 +808,7 @@ impl Render for JInkPopup {
                         "r" => this.trigger_ai_refine(cx),
                         "e" => this.trigger_ai_enhance(cx),
                         "t" => this.trigger_ai_translate(mods.shift, cx),
+                        "enter" if mods.shift => this.trigger_inject(true, window, cx),
                         "enter" => this.trigger_ai_explain(cx),
                         "l" => this.trigger_speak(cx),
                         "m" => this.toggle_mic(cx),
@@ -1172,7 +1173,7 @@ impl JInkPopup {
                                     .text_color(if has_text { Theme::ink() } else { Theme::hint() })
                                     .hover(|st| st.opacity(0.88).cursor_pointer())
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                        this.trigger_inject(window, cx);
+                                        this.trigger_inject(this.settings.auto_send, window, cx);
                                     }))
                                     .child(tr(&self.settings.ui_lang, "insert")),
                             ),
@@ -1236,6 +1237,18 @@ impl JInkPopup {
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
                             this.settings.hide_on_blur = !this.settings.hide_on_blur;
+                            let _ = save_settings(&this.settings);
+                            cx.notify();
+                        }),
+                    )),
+            )
+            .child(
+                div().flex().items_center().gap_2()
+                    .child(div().w(px(110.0)).flex_none().text_xs().text_color(Theme::hint()).child(tr(l, "autosend")))
+                    .child(toggle(onoff(s.auto_send), s.auto_send).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.settings.auto_send = !this.settings.auto_send;
                             let _ = save_settings(&this.settings);
                             cx.notify();
                         }),

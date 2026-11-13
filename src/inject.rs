@@ -13,6 +13,7 @@
 // ctrl+shift+v there. Images stay on ctrl+v: the terminal can't paste an image,
 // but the CLI reads it from the clipboard on ^V.
 // macOS: CoreGraphics Cmd+V. Windows: enigo Ctrl+V.
+// `send` presses Return after the last paste (auto-send in chat apps).
 use std::{borrow::Cow, thread, time::Duration};
 
 pub enum Part {
@@ -63,7 +64,7 @@ pub fn set_clipboard_image(cb: &mut arboard::Clipboard, path: &str) -> Result<()
 }
 
 #[cfg(target_os = "linux")]
-pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
+pub fn inject_text(text: &str, images: &[(u32, String)], send: bool) -> Result<(), String> {
     // Give focus a moment to return to the target app after the popup hides.
     thread::sleep(Duration::from_millis(120));
 
@@ -98,7 +99,15 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
             }
         }
     }
+    if send {
+        press_enter()?;
+    }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn press_enter() -> Result<(), String> {
+    paste("Return")
 }
 
 /// Standalone terminal emulators, matched against the X11 window class.
@@ -143,7 +152,7 @@ fn paste(keys: &str) -> Result<(), String> {
 /// macOS / Windows: paste each run via the clipboard. Text and images alike go
 /// through clipboard + a simulated paste shortcut.
 #[cfg(not(target_os = "linux"))]
-pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
+pub fn inject_text(text: &str, images: &[(u32, String)], send: bool) -> Result<(), String> {
     eprintln!("[jink] inject_text called: {text:?}");
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     thread::sleep(Duration::from_millis(100));
@@ -171,7 +180,25 @@ pub fn inject_text(text: &str, images: &[(u32, String)]) -> Result<(), String> {
         paste()?;
         thread::sleep(Duration::from_millis(150));
     }
+    if send {
+        press_enter()?;
+    }
     Ok(())
+}
+
+/// macOS: Return through CoreGraphics.
+#[cfg(target_os = "macos")]
+fn press_enter() -> Result<(), String> {
+    crate::mac_keys::return_key()
+}
+
+/// Windows: simulate Enter with enigo.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn press_enter() -> Result<(), String> {
+    use enigo::{Direction::Click, Enigo, Key, Keyboard, Settings as EnigoSettings};
+
+    let mut enigo = Enigo::new(&EnigoSettings::default()).map_err(|e| e.to_string())?;
+    enigo.key(Key::Return, Click).map_err(|e| e.to_string())
 }
 
 /// macOS: Cmd+V through CoreGraphics (enigo traps when used off the main thread).
