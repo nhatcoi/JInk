@@ -43,5 +43,6 @@ strip = true
 
 [patch.crates-io]
 xattr = { path = "crates/xattr" }
+blade-graphics = { path = "crates/blade-graphics" }
 
 
