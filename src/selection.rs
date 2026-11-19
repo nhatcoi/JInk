@@ -33,9 +33,22 @@ fn clean(text: String) -> Option<String> {
 #[cfg(target_os = "linux")]
 mod imp {
     use arboard::{GetExtLinux, LinuxClipboardKind};
+    use std::sync::Mutex;
+
+    static LAST_SEEN: Mutex<Option<String>> = Mutex::new(None);
 
     pub fn fast() -> super::Fast {
-        super::Fast::Done(primary())
+        super::Fast::Done(primary().and_then(fresh))
+    }
+
+    // PRIMARY keeps the old text after deselecting; only a changed value counts as a new selection
+    fn fresh(text: String) -> Option<String> {
+        let mut last = LAST_SEEN.lock().ok()?;
+        if last.as_deref() == Some(text.as_str()) {
+            return None;
+        }
+        *last = Some(text.clone());
+        Some(text)
     }
 
     pub fn slow() -> Option<String> {

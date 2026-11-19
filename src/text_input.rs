@@ -148,6 +148,15 @@ pub enum TextInputEvent {
     UndoEmpty,
     /// Clipboard held an image and no text on paste.
     PasteImage,
+    /// Pasted text too long to show inline; the owner decides how to hold it.
+    PasteLong(String),
+}
+
+const LONG_PASTE_LINES: usize = 10;
+const LONG_PASTE_CHARS: usize = 1000;
+
+pub fn is_long_paste(text: &str) -> bool {
+    text.lines().count() > LONG_PASTE_LINES || text.chars().count() > LONG_PASTE_CHARS
 }
 
 #[derive(Clone)]
@@ -755,6 +764,10 @@ impl TextInput {
             let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
             if self.single_line {
                 text = text.replace('\n', " ");
+            }
+            if !self.single_line && is_long_paste(&text) {
+                cx.emit(TextInputEvent::PasteLong(text));
+                return;
             }
             let r = self.selected_range.clone();
             self.edit(r, &text, false, cx);

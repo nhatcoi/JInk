@@ -6,8 +6,10 @@ use crate::ai::{self, AiConfig, AiStreamEvent};
 use crate::inject;
 use crate::text_input::{TextInput, TextInputEvent};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+#[derive(Clone, PartialEq)]
 struct Attachment {
     name: String,
     path: String,
@@ -15,7 +17,38 @@ struct Attachment {
     image_index: Option<u32>,
 }
 
+#[derive(Clone, PartialEq)]
+struct PastedText {
+    token: String,
+    text: String,
+}
+
+static VIEWERS_OPEN: AtomicUsize = AtomicUsize::new(0);
+
+const HISTORY_LIMIT: usize = 30;
+
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+// popup window is recreated on every open; unsent input (text, images, pastes) survives here
+#[derive(Default, PartialEq)]
+struct Draft {
+    text: String,
+    attachments: Vec<Attachment>,
+    pastes: Vec<PastedText>,
+    image_seq: u32,
+    paste_seq: u32,
+}
+
+static DRAFT: std::sync::Mutex<Option<Draft>> = std::sync::Mutex::new(None);
+
+fn image_extension(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0xFF, 0xD8, ..] => "jpg",
+        [b'R', b'I', b'F', b'F', ..] => "webp",
+        [b'G', b'I', b'F', ..] => "gif",
+        _ => "png",
+    }
+}
 
 fn is_image_path(path: &Path) -> bool {
     path.extension()
@@ -44,7 +77,6 @@ pub struct JInkPopup {
     _input_sub: Subscription,
     pub url_input: Entity<TextInput>,
     pub model_input: Entity<TextInput>,
-    pub stt_input: Entity<TextInput>,
     pub hotkey_input: Entity<TextInput>,
     pub key_input: Entity<TextInput>,
     _field_subs: Vec<Subscription>,
@@ -55,11 +87,18 @@ pub struct JInkPopup {
     wave_bars: [f32; 10],
     pub status: Option<String>,
     pub is_streaming: bool,
+    pub image_model_input: Entity<TextInput>,
     pub is_recording_hotkey: bool,
+    injected: bool,
+    prev_llm: Option<(String, String)>,
     pub settings: Settings,
     pub active_view: ActiveView,
     pub focus_handle: FocusHandle,
     attachments: Vec<Attachment>,
+    pastes: Vec<PastedText>,
+    paste_seq: u32,
+    viewing_paste: Option<usize>,
+    show_history: bool,
     // selection from another app: sent to explain/enhance as background only, never injected
     context: Option<String>,
     image_seq: u32,
@@ -88,7 +127,8 @@ impl JInkPopup {
     pub fn new(initial_text: Option<String>, context: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let s = load_settings();
         let input = cx.new(|cx| TextInput::new("Type anything…", cx));
-        if let Some(text) = initial_text {
+        let draft = if initial_text.is_some() { Draft::default() } else { DRAFT.lock().ok().and_then(|mut d| d.take()).unwrap_or_default() };
+        if let Some(text) = initial_text.or_else(|| (!draft.text.is_empty()).then(|| draft.text.clone())) {
             input.update(cx, |i, cx| i.set_text_silent(&text, cx));
         }
         Self::watch_click_outside(window, cx);
@@ -97,6 +137,7 @@ impl JInkPopup {
                 TextInputEvent::Submit => this.trigger_inject(this.settings.auto_send, window, cx),
                 TextInputEvent::UndoEmpty => this.undo_ai(cx),
                 TextInputEvent::PasteImage => this.paste_clipboard_image(window, cx),
+                TextInputEvent::PasteLong(text) => this.add_pasted_text(text.clone(), window, cx),
                 TextInputEvent::Changed => {
                     if this.translation.is_some() && !this.is_streaming {
                         this.translation = None;
@@ -106,7 +147,7 @@ impl JInkPopup {
         });
         let url_input = cx.new(|cx| TextInput::new_field("https://api.openai.com/v1", &s.ai_base_url, 500.0, cx));
         let model_input = cx.new(|cx| TextInput::new_field("gpt-4o-mini", &s.ai_model, 500.0, cx));
-        let stt_input = cx.new(|cx| TextInput::new_field("whisper-1", &s.stt_model, 500.0, cx));
+        let image_model_input = cx.new(|cx| TextInput::new_field("gpt-image-1", &s.image_model, 500.0, cx));
         let default_hotkey_placeholder = crate::settings::HOTKEY_PRESETS[0].1;
 
         let hotkey_input = cx.new(|cx| TextInput::new_field(default_hotkey_placeholder, &s.hotkey, 500.0, cx));
@@ -124,15 +165,15 @@ impl JInkPopup {
                 let _ = save_settings(&this.settings);
             }
         }));
-        field_subs.push(cx.subscribe(&model_input, |this, e, ev: &TextInputEvent, cx| {
+        field_subs.push(cx.subscribe(&image_model_input, |this, e, ev: &TextInputEvent, cx| {
             if let TextInputEvent::Changed = ev {
-                this.settings.ai_model = e.read(cx).text().trim().to_string();
+                this.settings.image_model = e.read(cx).text().trim().to_string();
                 let _ = save_settings(&this.settings);
             }
         }));
-        field_subs.push(cx.subscribe(&stt_input, |this, e, ev: &TextInputEvent, cx| {
+        field_subs.push(cx.subscribe(&model_input, |this, e, ev: &TextInputEvent, cx| {
             if let TextInputEvent::Changed = ev {
-                this.settings.stt_model = e.read(cx).text().trim().to_string();
+                this.settings.ai_model = e.read(cx).text().trim().to_string();
                 let _ = save_settings(&this.settings);
             }
         }));
@@ -150,7 +191,6 @@ impl JInkPopup {
             _input_sub: sub,
             url_input,
             model_input,
-            stt_input,
             hotkey_input,
             key_input,
             _field_subs: field_subs,
@@ -160,13 +200,20 @@ impl JInkPopup {
             wave_bars: [0.08; 10],
             status: None,
             is_streaming: false,
+            image_model_input,
             is_recording_hotkey: false,
+            injected: false,
+            prev_llm: None,
             settings: s,
             active_view: ActiveView::Input,
             focus_handle: cx.focus_handle(),
-            attachments: Vec::new(),
+            attachments: draft.attachments,
+            pastes: draft.pastes,
+            paste_seq: draft.paste_seq,
+            viewing_paste: None,
+            show_history: false,
             context,
-            image_seq: 0,
+            image_seq: draft.image_seq,
             picking_files: false,
             moving_since: None,
             last_origin: Point::default(),
@@ -189,7 +236,7 @@ impl JInkPopup {
                         was_active = true;
                         return;
                     }
-                    if was_active && !active && this.settings.hide_on_blur && !this.picking_files {
+                    if was_active && !active && this.settings.hide_on_blur && !this.picking_files && VIEWERS_OPEN.load(Ordering::Relaxed) == 0 {
                         window.remove_window();
                     }
                     was_active = active;
@@ -233,6 +280,29 @@ impl JInkPopup {
             self.input.update(cx, |i, cx| i.insert_at_cursor(&format!("[#Image{n}]"), window, cx));
         }
         cx.notify();
+    }
+
+    fn add_pasted_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.paste_seq += 1;
+        let token = format!("[Pasted text #{} +{} lines]", self.paste_seq, text.lines().count());
+        self.input.update(cx, |i, cx| i.insert_at_cursor(&token, window, cx));
+        self.pastes.push(PastedText { token, text });
+        cx.notify();
+    }
+
+    fn remove_pasted_text(&mut self, index: usize, cx: &mut Context<Self>) {
+        let removed = self.pastes.remove(index);
+        let text = self.current_text(cx).replace(&removed.token, "");
+        self.input.update(cx, |i, cx| i.set_text_silent(&text, cx));
+        self.viewing_paste = None;
+        cx.notify();
+    }
+
+    fn expand_pastes(&self, mut text: String) -> String {
+        for p in &self.pastes {
+            text = text.replace(&p.token, &p.text);
+        }
+        text
     }
 
     fn remove_attachment(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -308,8 +378,92 @@ impl JInkPopup {
         self.input.read(cx).text().to_string()
     }
 
+    fn save_draft(&self, cx: &App) {
+        if self.injected {
+            return;
+        }
+        let draft = Draft {
+            text: self.current_text(cx),
+            attachments: self.attachments.clone(),
+            pastes: self.pastes.clone(),
+            image_seq: self.image_seq,
+            paste_seq: self.paste_seq,
+        };
+        if let Ok(mut slot) = DRAFT.lock() {
+            if slot.as_ref() != Some(&draft) {
+                *slot = Some(draft);
+            }
+        }
+    }
+
+    // chip rows wrap, so the window height must follow the row count (image chips are ~90px wide, ~56px tall)
+    fn chips_height(&self) -> f32 {
+        const IMAGE_CHIPS_PER_ROW: usize = 6;
+        const TEXT_CHIPS_PER_ROW: usize = 3;
+        let images = self.attachments.iter().filter(|a| a.image_index.is_some()).count();
+        let others = self.attachments.len() - images + self.pastes.len() + usize::from(self.context.is_some());
+        if images + others == 0 {
+            return 0.0;
+        }
+        let image_rows = images.div_ceil(IMAGE_CHIPS_PER_ROW) as f32;
+        let text_rows = others.div_ceil(TEXT_CHIPS_PER_ROW) as f32;
+        8.0 + image_rows * 58.0 + text_rows * 26.0
+    }
+
+    fn remember_input(&mut self, text: String) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let history = &mut self.settings.input_history;
+        history.retain(|t| *t != text);
+        history.insert(0, text);
+        history.truncate(HISTORY_LIMIT);
+        let _ = save_settings(&self.settings);
+    }
+
+    fn render_history(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if !self.show_history {
+            return None;
+        }
+        let rows = self.settings.input_history.iter().map(|text| {
+            let preview: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let preview = if preview.chars().count() > 90 { format!("{}…", preview.chars().take(90).collect::<String>()) } else { preview };
+            let full = text.clone();
+            div()
+                .px_2()
+                .py_1()
+                .rounded(px(4.0))
+                .text_xs()
+                .text_color(Theme::paper())
+                .hover(|st| st.bg(Theme::chip_hover()).cursor_pointer())
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                    this.input.update(cx, |i, cx| i.set_text_silent(&full, cx));
+                    this.show_history = false;
+                    cx.notify();
+                }))
+                .child(preview)
+        });
+        let empty = self.settings.input_history.is_empty().then(|| {
+            div().p_2().text_xs().text_color(Theme::hint()).child(tr(&self.settings.ui_lang, "no_history"))
+        });
+        Some(
+            div()
+                .id("history-list")
+                .h(px(188.0))
+                .overflow_y_scroll()
+                .p_1()
+                .rounded(px(6.0))
+                .bg(Theme::chip_hover())
+                .border_1()
+                .border_color(Theme::pill_border())
+                .children(rows)
+                .children(empty),
+        )
+    }
+
     pub fn trigger_inject(&mut self, send: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let mut to_inject = self.translation.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| self.current_text(cx));
+        let mut to_inject = self.translation.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| self.expand_pastes(self.current_text(cx)));
+        let text_for_history = to_inject.clone();
         let files: Vec<&str> = self.attachments.iter().filter(|a| a.image_index.is_none()).map(|a| a.path.as_str()).collect();
         if !files.is_empty() {
             if !to_inject.trim().is_empty() {
@@ -325,7 +479,12 @@ impl JInkPopup {
         if to_inject.trim().is_empty() && images.is_empty() {
             return;
         }
+        self.remember_input(text_for_history);
+        self.injected = true;
         window.remove_window();
+        if let Ok(mut draft) = DRAFT.lock() {
+            *draft = None;
+        }
 
         std::thread::spawn(move || {
             let _ = inject::inject_text(&to_inject, &images, send);
@@ -336,11 +495,53 @@ impl JInkPopup {
     /// is empty. Returns (text, background context) — the context is only background when
     /// the input has its own text.
     fn action_source(&self, cx: &App) -> Option<(String, Option<String>)> {
-        let text = self.current_text(cx);
+        let text = self.expand_pastes(self.current_text(cx));
         if !text.trim().is_empty() {
             return Some((text, self.context.clone()));
         }
         self.context.clone().filter(|c| !c.trim().is_empty()).map(|c| (c, None))
+    }
+
+    pub fn trigger_generate_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((prompt, _)) = self.action_source(cx) else { return };
+        if self.is_streaming || self.settings.image_model.is_empty() {
+            return;
+        }
+        self.is_streaming = true;
+        self.status = Some(tr(&self.settings.ui_lang, "imaging").into());
+        cx.notify();
+
+        let (base, key, model) = (
+            self.settings.ai_base_url.clone(),
+            self.settings.ai_key.clone(),
+            self.settings.image_model.clone(),
+        );
+        let seq = self.image_seq + 1;
+        let task = crate::runtime().spawn(async move {
+            let bytes = ai::generate_image(&base, &key, &model, &prompt).await.map_err(|e| e.to_string())?;
+            let ext = image_extension(&bytes);
+            let path = std::env::temp_dir().join(format!("jink-gen-{}-{seq}.{ext}", std::process::id()));
+            std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+            Ok::<_, String>(path)
+        });
+
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await.map_err(|e| e.to_string()).and_then(|r| r);
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.is_streaming = false;
+                match result {
+                    Ok(path) => {
+                        this.status = None;
+                        this.undo_text = Some(this.current_text(cx));
+                        this.input.update(cx, |i, cx| i.set_text_silent("", cx));
+                        this.add_attachment(path, window, cx);
+                    }
+                    Err(err) => this.status = Some(format!("Error: {err}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn trigger_ai_enhance(&mut self, cx: &mut Context<Self>) {
@@ -452,7 +653,7 @@ impl JInkPopup {
         let (base, key, model) = (
             self.settings.ai_base_url.clone(),
             self.settings.ai_key.clone(),
-            self.settings.stt_model.clone(),
+            self.settings.ai_model.clone(),
         );
         let langs = vec![self.settings.lang_a.clone(), self.settings.lang_b.clone()];
 
@@ -544,7 +745,7 @@ impl JInkPopup {
     }
 
     pub fn trigger_ai_explain(&mut self, cx: &mut Context<Self>) {
-        let text = self.current_text(cx);
+        let text = self.expand_pastes(self.current_text(cx));
         if (text.trim().is_empty() && self.attachments.is_empty() && self.context.is_none()) || self.is_streaming {
             return;
         }
@@ -592,6 +793,7 @@ impl JInkPopup {
     }
 
     pub fn set_preset(&mut self, base_url: &str, model: &str, cx: &mut Context<Self>) {
+        self.prev_llm = Some((self.settings.ai_base_url.clone(), self.settings.ai_model.clone()));
         self.settings.ai_base_url = base_url.to_string();
         self.settings.ai_model = model.to_string();
         self.save_current_settings(cx);
@@ -691,13 +893,14 @@ impl JInkPopup {
 impl Render for JInkPopup {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_settings = self.active_view == ActiveView::Settings;
+        self.save_draft(cx);
 
         // Keep keyboard focus on a rendered element so Esc / typing always work.
         let input_focus = self.input.read(cx).focus_handle(cx);
         if is_settings {
             let field_focused = self.url_input.read(cx).is_focused(window)
                 || self.model_input.read(cx).is_focused(window)
-                || self.stt_input.read(cx).is_focused(window)
+                || self.image_model_input.read(cx).is_focused(window)
                 || self.hotkey_input.read(cx).is_focused(window)
                 || self.key_input.read(cx).is_focused(window);
             if self.is_recording_hotkey {
@@ -712,11 +915,12 @@ impl Render for JInkPopup {
         }
 
         // Window grows for the settings panel, shrinks back for the input.
-        let want_w = if is_settings { 720.0 } else { 680.0 };
+        let want_w = if is_settings { 720.0 } else { 740.0 };
         let want_h = if is_settings {
             540.0
         } else {
-            96.0 + self.input.read(cx).visible_height() + if self.attachments.is_empty() && self.context.is_none() { 0.0 } else { 28.0 }
+            96.0 + self.input.read(cx).visible_height() + self.chips_height()
+                + if self.viewing_paste.is_some() || self.show_history { 196.0 } else { 0.0 }
                 + self.translation.as_ref().map_or(0.0, |t| {
                     let lines: usize = t.split('\n').map(|l| l.chars().count() / 58 + 1).sum();
                     8.0 + 22.0 * (lines.min(5) as f32)
@@ -813,6 +1017,7 @@ impl Render for JInkPopup {
                         "l" => this.trigger_speak(cx),
                         "m" => this.toggle_mic(cx),
                         "o" => this.pick_files(window, cx),
+                        "i" => this.trigger_generate_image(window, cx),
                         _ => {}
                     }
                 }
@@ -831,8 +1036,8 @@ impl Render for JInkPopup {
             .border_color(Theme::glass_edge())
             .rounded(px(12.0))
             .overflow_hidden()
-            // vermilion spine
-            .child(div().w(px(3.0)).flex_none().bg(Theme::seal()))
+            // vermilion spine (inset past the 12px corner arc; GPUI overflow_hidden clips to a rect)
+            .child(div().w(px(3.0)).flex_none().my(px(12.0)).rounded_r(px(2.0)).bg(Theme::seal()))
             .child(
                 div()
                     .flex()
@@ -919,10 +1124,16 @@ impl JInkPopup {
             );
         }
         for (i, a) in self.attachments.iter().enumerate() {
-            let label = match a.image_index {
-                Some(n) => format!("🖼 #{n} {}", a.name),
-                None => format!("📎 {}", a.name),
-            };
+            let label = a.image_index.is_none().then(|| format!("📎 {}", a.name));
+            let thumb = a.image_index.map(|_| {
+                let path = PathBuf::from(&a.path);
+                div()
+                    .hover(|st| st.cursor_pointer().opacity(0.8))
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |_, _, _, cx| {
+                        open_image_viewer(path.clone(), cx);
+                    }))
+                    .child(img(PathBuf::from(&a.path)).w(px(64.0)).h(px(48.0)).rounded(px(3.0)).object_fit(ObjectFit::Contain))
+            });
             row = row.child(
                 div()
                     .flex()
@@ -935,7 +1146,8 @@ impl JInkPopup {
                     .border_1()
                     .border_color(Theme::pill_border())
                     .text_color(Theme::paper())
-                    .child(label)
+                    .children(thumb)
+                    .children(label)
                     .child(
                         div()
                             .text_color(Theme::hint())
@@ -947,7 +1159,62 @@ impl JInkPopup {
                     ),
             );
         }
+        for (i, p) in self.pastes.iter().enumerate() {
+            let active = self.viewing_paste == Some(i);
+            row = row.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .rounded(px(4.0))
+                    .text_xs()
+                    .bg(if active { Theme::chip_hover() } else { Theme::pill_bg() })
+                    .border_1()
+                    .border_color(if active { Theme::seal() } else { Theme::pill_border() })
+                    .text_color(Theme::paper())
+                    .child(
+                        div()
+                            .hover(|st| st.text_color(Theme::seal()).cursor_pointer())
+                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                this.show_history = false;
+                                this.viewing_paste = if this.viewing_paste == Some(i) { None } else { Some(i) };
+                                cx.notify();
+                            }))
+                            .child(format!("📋 {}", p.token.trim_matches(['[', ']']))),
+                    )
+                    .child(
+                        div()
+                            .text_color(Theme::hint())
+                            .hover(|st| st.text_color(Theme::seal()).cursor_pointer())
+                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                this.remove_pasted_text(i, cx);
+                            }))
+                            .child("×"),
+                    ),
+            );
+        }
         row
+    }
+
+    fn render_paste_viewer(&self) -> Option<impl IntoElement> {
+        let paste = self.pastes.get(self.viewing_paste?)?;
+        Some(
+            div()
+                .id("paste-viewer")
+                .h(px(188.0))
+                .overflow_y_scroll()
+                .px_3()
+                .py_2()
+                .rounded(px(6.0))
+                .bg(Theme::chip_hover())
+                .border_1()
+                .border_color(Theme::pill_border())
+                .font_family(FONT)
+                .text_xs()
+                .text_color(Theme::paper())
+                .child(paste.text.clone()),
+        )
     }
 
     fn render_input_view(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1016,6 +1283,19 @@ impl JInkPopup {
                                         14.0,
                                         if crate::speech::is_speaking() { Theme::ink() } else { Theme::hint() },
                                     )),
+                            )
+                            .child(
+                                div()
+                                    .p_1()
+                                    .rounded(px(4.0))
+                                    .bg(if self.show_history { Theme::chip_hover() } else { gpui::rgba(0x00000000) })
+                                    .hover(|st| st.bg(Theme::chip_hover()).cursor_pointer())
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.show_history = !this.show_history;
+                                        this.viewing_paste = None;
+                                        cx.notify();
+                                    }))
+                                    .child(Self::icon("history", 14.0, if self.show_history { Theme::paper() } else { Theme::hint() })),
                             )
                             .child(
                                 div()
@@ -1118,6 +1398,8 @@ impl JInkPopup {
                     )
             }))
             .child(self.render_attachments(cx))
+            .children(self.render_paste_viewer())
+            .children(self.render_history(cx))
             // hairline
             .child(div().h(px(1.0)).w_full().bg(Theme::pill_border()))
             // footer: keycap actions · lang · stamp
@@ -1126,11 +1408,14 @@ impl JInkPopup {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap_2()
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .items_center()
-                            .gap_2()
+                            .gap_x_1p5()
+                            .gap_y_1()
                             .child(self.action_button("R", "refine", is_busy, cx.listener(|this, _, _, cx| {
                                 this.trigger_ai_refine(cx);
                             })))
@@ -1146,6 +1431,9 @@ impl JInkPopup {
                             .child(self.action_button("O", "attach", false, cx.listener(|this, _, window, cx| {
                                 this.pick_files(window, cx);
                             })))
+                            .child(self.action_button("I", "image", is_busy, cx.listener(|this, _, window, cx| {
+                                this.trigger_generate_image(window, cx);
+                            })))
                             .child(self.action_button("↵", "explain", is_busy, cx.listener(|this, _, _, cx| {
                                 this.trigger_ai_explain(cx);
                             })))
@@ -1160,6 +1448,7 @@ impl JInkPopup {
                     .child(
                         div()
                             .flex()
+                            .flex_none()
                             .items_center()
                             .gap_3()
                             .child(
@@ -1253,6 +1542,27 @@ impl JInkPopup {
                             cx.notify();
                         }),
                     )),
+            )
+            .child(
+                div().flex().items_center().gap_2()
+                    .child(div().w(px(110.0)).flex_none().text_xs().text_color(Theme::hint()).child(tr(l, "autolaunch")))
+                    .child(toggle(onoff(s.auto_launch), s.auto_launch).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            let next = !this.settings.auto_launch;
+                            match crate::autostart::set_enabled(next) {
+                                Ok(()) => {
+                                    this.settings.auto_launch = next;
+                                    this.status = None;
+                                    let _ = save_settings(&this.settings);
+                                }
+                                Err(err) => {
+                                    this.status = Some(format!("Error: {err}"));
+                                }
+                            }
+                            cx.notify();
+                        }),
+                    )),
             );
         if crate::selection::SUPPORTED {
             toggles = toggles
@@ -1317,36 +1627,6 @@ impl JInkPopup {
                     )),
             )
             .child(div().h(px(1.0)).w_full().bg(Theme::pill_border()))
-            .child(Self::field_row("Base URL", self.url_input.clone().into_any_element()))
-            .child(Self::field_row("Model", self.model_input.clone().into_any_element()))
-            .child(Self::field_row(tr(l, "mic_model"), self.stt_input.clone().into_any_element()))
-            .child(Self::field_row("API Key", self.key_input.clone().into_any_element()))
-            .child(Self::field_row(tr(l, "hotkey"), self.hotkey_input.clone().into_any_element()))
-            .child(
-                row()
-                    .child(label(""))
-                    .children(crate::settings::HOTKEY_PRESETS.iter().map(|(lbl, val)| {
-                        let val = *val;
-                        chip(lbl).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| this.set_hotkey(val, cx)),
-                        )
-                    }))
-                    .child(
-                        toggle(if recording { tr(l, "recording") } else { tr(l, "record") }, recording)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.is_recording_hotkey = !this.is_recording_hotkey;
-                                    if this.is_recording_hotkey {
-                                        this.status = None;
-                                        window.focus(&this.focus_handle);
-                                    }
-                                    cx.notify();
-                                }),
-                            ),
-                    ),
-            )
             .child(
                 row()
                     .child(label(tr(l, "preset")))
@@ -1374,7 +1654,43 @@ impl JInkPopup {
                             );
                             this.sync_fields(cx);
                         }),
-                    )),
+                    ))
+                    .children(self.prev_llm.is_some().then(|| {
+                        chip("↶").on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| this.restore_llm(cx)),
+                        )
+                    })),
+            )
+            .child(Self::field_row("Base URL", self.url_input.clone().into_any_element()))
+            .child(Self::field_row("Model", self.model_input.clone().into_any_element()))
+            .child(Self::field_row("Image model", self.image_model_input.clone().into_any_element()))
+            .child(Self::field_row("API Key", self.key_input.clone().into_any_element()))
+            .child(Self::field_row(tr(l, "hotkey"), self.hotkey_input.clone().into_any_element()))
+            .child(
+                row()
+                    .child(label(""))
+                    .children(crate::settings::HOTKEY_PRESETS.iter().map(|(lbl, val)| {
+                        let val = *val;
+                        chip(lbl).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| this.set_hotkey(val, cx)),
+                        )
+                    }))
+                    .child(
+                        toggle(if recording { tr(l, "recording") } else { tr(l, "record") }, recording)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.is_recording_hotkey = !this.is_recording_hotkey;
+                                    if this.is_recording_hotkey {
+                                        this.status = None;
+                                        window.focus(&this.focus_handle);
+                                    }
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
             )
             .child(
                 row()
@@ -1417,6 +1733,14 @@ impl JInkPopup {
             .child(div().h(px(1.0)).w_full().bg(Theme::pill_border()))
             .child(toggles)
             .children(self.status.clone().map(|st| div().text_xs().text_color(Theme::amber()).child(st)))
+    }
+
+    fn restore_llm(&mut self, cx: &mut Context<Self>) {
+        let Some((url, model)) = self.prev_llm.take() else { return };
+        self.settings.ai_base_url = url;
+        self.settings.ai_model = model;
+        self.save_current_settings(cx);
+        self.sync_fields(cx);
     }
 
     fn sync_fields(&mut self, cx: &mut Context<Self>) {
@@ -1489,5 +1813,59 @@ impl JInkPopup {
                     .child(format!("{KEY_MOD}{key}")),
             )
             .child(label)
+    }
+}
+
+// separate window so the popup stays open; blur-close is suspended while one is up
+fn open_image_viewer(path: PathBuf, cx: &mut App) {
+    const FALLBACK: (u32, u32) = (800, 600);
+    const MAX: (f32, f32) = (1000.0, 760.0);
+    let (w, h) = image::image_dimensions(&path).unwrap_or(FALLBACK);
+    let scale = (MAX.0 / w as f32).min(MAX.1 / h as f32).min(1.0);
+    let bounds = Bounds::centered(None, size(px((w as f32 * scale).max(320.0)), px((h as f32 * scale).max(240.0))), cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: None,
+        kind: WindowKind::Normal,
+        #[cfg(target_os = "linux")]
+        window_decorations: Some(WindowDecorations::Client),
+        ..Default::default()
+    };
+    VIEWERS_OPEN.fetch_add(1, Ordering::Relaxed);
+    let opened = cx.open_window(options, |window, cx| {
+        let viewer = cx.new(|cx| ImageViewer { path, focus: cx.focus_handle() });
+        window.focus(&viewer.read(cx).focus);
+        cx.observe_release(&viewer, |_, _| {
+            VIEWERS_OPEN.fetch_sub(1, Ordering::Relaxed);
+        })
+        .detach();
+        viewer
+    });
+    if opened.is_err() {
+        VIEWERS_OPEN.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+struct ImageViewer {
+    path: PathBuf,
+    focus: FocusHandle,
+}
+
+impl Render for ImageViewer {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .track_focus(&self.focus)
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(Theme::ink())
+            .on_key_down(cx.listener(|_, e: &KeyDownEvent, window, _| {
+                if e.keystroke.key == "escape" {
+                    window.remove_window();
+                }
+            }))
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, _| window.remove_window()))
+            .child(img(self.path.clone()).size_full().object_fit(ObjectFit::Contain))
     }
 }

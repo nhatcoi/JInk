@@ -81,6 +81,26 @@ async fn transcribe_via_chat(base_url: &str, api_key: &str, model: &str, wav: Ve
     Ok(strip_think_tags(text).trim().to_string())
 }
 
+/// Text-to-image via `/images/generations`; returns the encoded image bytes (b64_json or url).
+pub async fn generate_image(base_url: &str, api_key: &str, model: &str, prompt: &str) -> anyhow::Result<Vec<u8>> {
+    let url = format!("{}/images/generations", base_url.trim_end_matches('/'));
+    let body = json!({ "model": model, "prompt": prompt, "n": 1 });
+    let client = reqwest::Client::new();
+    let resp = client.post(&url).bearer_auth(api_key).json(&body).send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("HTTP {}: {}", status, text);
+    }
+    let json: Value = resp.json().await?;
+    let item = &json["data"][0];
+    if let Some(b64) = item["b64_json"].as_str() {
+        return Ok(base64::engine::general_purpose::STANDARD.decode(b64)?);
+    }
+    let image_url = item["url"].as_str().ok_or_else(|| anyhow::anyhow!("no image in response"))?;
+    Ok(client.get(image_url).send().await?.error_for_status()?.bytes().await?.to_vec())
+}
+
 pub async fn stream_chat(
     config: AiConfig,
     messages: Vec<ChatMessage>,

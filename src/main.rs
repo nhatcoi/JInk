@@ -1,4 +1,5 @@
 mod ai;
+mod autostart;
 mod i18n;
 mod mic;
 mod inject;
@@ -145,7 +146,7 @@ fn open_popup(cx: &mut App) {
                     origin.y = origin.y.max(area.top());
                 } else {
                     // saved position: leave room for the settings panel growing
-                    origin.y = origin.y.min(area.bottom() - px(500.0)).max(area.top());
+                    origin.y = origin.y.min(area.bottom() - px(540.0)).max(area.top());
                 }
             }
             Bounds::new(origin, popup_size)
@@ -519,6 +520,7 @@ struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: &'static [u8] = match path {
+            "svg/history.svg" => include_bytes!("../assets/svg/history.svg"),
             "svg/plus.svg" => include_bytes!("../assets/svg/plus.svg"),
             "svg/arrow-up.svg" => include_bytes!("../assets/svg/arrow-up.svg"),
             "svg/sparkles.svg" => include_bytes!("../assets/svg/sparkles.svg"),
@@ -539,7 +541,11 @@ impl AssetSource for Assets {
 }
 
 fn main() {
+    let background = std::env::args().any(|a| a == "--background");
     let settings = settings::load_settings();
+    if settings.auto_launch {
+        let _ = autostart::set_enabled(true);
+    }
     let hotkey_manager = GlobalHotKeyManager::new().expect("Failed to init global hotkey manager");
     let hotkey = parse_or_default_hotkey(&settings.hotkey);
     if let Err(e) = hotkey_manager.register(hotkey) {
@@ -588,7 +594,9 @@ fn main() {
             });
         }
 
-        open_popup(cx);
+        if !background {
+            open_popup(cx);
+        }
 
         cx.spawn(async move |cx| {
             loop {

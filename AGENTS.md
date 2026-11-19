@@ -25,13 +25,13 @@
 ## Attachments, selection, click-outside (`src/popup.rs`)
 
 - Ctrl+V with image-only clipboard (`TextInputEvent::PasteImage`) → saved as temp PNG via `arboard`; `^O`/attach button (`prompt_for_paths`) and drag-drop add files. Images insert a `[#ImageN]` token and ride inline on inject + go to Explain as multimodal; non-image files are appended as path lines on inject. Chips row shows attachments (× removes, token too).
-- Selection capture lives in `src/selection.rs`, one separate impl per OS (Linux PRIMARY selection; macOS reads `AXSelectedText` (then `AXSelectedTextMarkerRange` → `AXStringForTextMarkerRange` for Safari/Chromium pages) of the focused element over Accessibility first (few ms; an empty answer is trusted only from AXTextField/AXTextArea/AXComboBox, since web pages report "" while text is highlighted), and only if the app doesn't expose AX falls back to simulated Cmd+C with the clipboard restored, waiting for hotkey modifiers to be released (`selection::fast` / `selection::slow`). The popup never waits for it: `open_popup` takes the fast result inline; on `Fast::Slow` it opens the window unfocused (`focus: false`, target app keeps keyboard focus so the Cmd+C lands there), runs `slow()` on the background executor, then `attach_selection` + activates/focuses. Measured: popup drawn ~20ms after the hotkey (was ~330ms+); Windows none). Settings toggles show where `selection::SUPPORTED`.
+- Selection capture lives in `src/selection.rs`, one separate impl per OS (Linux PRIMARY selection, ignored when unchanged since last capture because PRIMARY survives deselect; macOS reads `AXSelectedText` (then `AXSelectedTextMarkerRange` → `AXStringForTextMarkerRange` for Safari/Chromium pages) of the focused element over Accessibility first (few ms; an empty answer is trusted only from AXTextField/AXTextArea/AXComboBox, since web pages report "" while text is highlighted), and only if the app doesn't expose AX falls back to simulated Cmd+C with the clipboard restored, waiting for hotkey modifiers to be released (`selection::fast` / `selection::slow`). The popup never waits for it: `open_popup` takes the fast result inline; on `Fast::Slow` it opens the window unfocused (`focus: false`, target app keeps keyboard focus so the Cmd+C lands there), runs `slow()` on the background executor, then `attach_selection` + activates/focuses. Measured: popup drawn ~20ms after the hotkey (was ~330ms+); Windows none). Settings toggles show where `selection::SUPPORTED`.
 - With `prefill_selection` on (off by default), the captured selection prefills the popup on open (`selection::selected_text`).
 - With `selection_context` on (default), the selection is captured on open as `JInkPopup.context` (chip with ×, never injected); `ai::refine_prompt`/`enhance_prompt`/`explain_prompt` append it (≤4000 chars) as background context. Ignored when `prefill_selection` is on (selection goes into the input instead).
 - Click-outside: 120ms poll of `window.is_window_active()` (gpui 0.2.2 has no activation observer); closes on active→inactive when `hide_on_blur` (toggle in settings), skipped while our file dialog is open.
 - Drag: header (JINK wordmark/status) `mouse_down` → `window.start_window_move()`; `moving_since` pauses click-outside because the WM drops activation during a move.
 - Linux window: `WindowKind::Normal` + `WindowDecorations::Client` (gpui `PopUp` = X11 NOTIFICATION type, KWin never keeps keyboard focus on it; Normal gets a KWin titlebar unless client decorations). KWin ignores the requested position, so `place_x11_popup` (xdotool/wmctrl) moves it to the chosen origin, pins above/skip-taskbar and focuses it after open.
-- Linux: transparent window + opaque `pill_bg` with `rounded(12px)` corners (no reliable X11 blur → unreadable over terminals). `place_x11_popup` sets `_NET_WM_WINDOW_OPACITY` 0 until the window is mapped and moved, hiding KWin's centered first frame. Ctrl+Shift+T = reverse translate.
+- Linux: transparent window + opaque `pill_bg` with `rounded(12px)` corners (no reliable X11 blur → unreadable over terminals). `crates/blade-graphics` is patched (`[patch.crates-io]`) to prefer `VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR` over `PRE_MULTIPLIED` so X11 Vulkan/KWin composites the 32-bit ARGB corners transparently instead of black. The left vermilion spine is inset `my(px(12.0))` (`rounded_r(2px)`) because GPUI's `overflow_hidden` only clips to a rect. `place_x11_popup` sets `_NET_WM_WINDOW_OPACITY` 0 until the window is mapped and moved, hiding KWin's centered first frame. Ctrl+Shift+T = reverse translate.
 - Not ported from main yet: image/clipboard-helper exemption for blur.
 
 ## Text injection (`src/inject.rs`)
@@ -68,6 +68,7 @@
 ## Settings persistence (`src/settings.rs`)
 
 - Saved as JSON at `~/.config/jink/settings.json`.
+- Auto-launch (`src/autostart.rs` + `settings.auto_launch`): toggle in Settings writes/removes an OS login item passing `--background` (Linux `~/.config/autostart/jink.desktop`, using `$APPIMAGE` when present; macOS `~/Library/LaunchAgents/com.nhatcoi.jink.plist`; Windows `HKCU\...\Run` via `reg.exe`). Startup syncs the entry when `auto_launch` is on and skips opening the initial popup when `--background` is passed.
 - Settings view in `src/popup.rs` includes:
   - Preset buttons for OpenAI (`gpt-4o-mini`), Ollama (`localhost:11434`), and OpenRouter.
   - "Paste API Key from Clipboard" button for one-click key configuration.
@@ -93,6 +94,27 @@
 
 - Picked in Settings (one chip row, exactly two selected; a new pick replaces the oldest). Every AI prompt (`ai::enhance/translate/explain_prompt`) tells the model the two languages: enhance/explain reply in the language of the user's text; translate auto-flips A↔B (other language → A). The popup just shows `A · B`; `Cmd+Shift+T`/reverse is the same action.
 
+## Image generation (`src/ai.rs::generate_image` + `src/popup.rs`)
+
+- `Cmd/Ctrl+I` / "image" action sends the input (or selected context) as prompt to `{base_url}/images/generations` (`settings.image_model`, same base URL + key as chat; handles `b64_json` or `url`). Result saved to a temp file and added as an `[#ImageN]` attachment; the prompt text moves to `undo_text` (Cmd+Z restores it).
+
+## Draft (`DRAFT` in `src/popup.rs`)
+
+- Popup window is recreated each open, so unsent input text is kept in a static, saved on every render (image tokens stripped) and restored on open unless a selection prefill is given. Cleared on inject.
+
+## Image generation (`src/ai.rs::generate_image` + `src/popup.rs`)
+
+- `Cmd/Ctrl+I` / "image" action sends the input (or selected context) as prompt to `{base_url}/images/generations` (`settings.image_model`, same base URL + key as chat; handles `b64_json` or `url`). Result saved to a temp file and added as an `[#ImageN]` attachment; the prompt text moves to `undo_text` (Cmd+Z restores it).
+
+## Draft + long paste (`src/popup.rs`, `src/text_input.rs`)
+
+- Popup window is recreated each open, so unsent input text is kept in the static `DRAFT`, saved on every render with its images and pastes (`Draft`) and restored on open unless a selection prefill is given. Cleared on inject (`injected` stops the last render re-saving it).
+- Paste over 10 lines / 1000 chars (`text_input::is_long_paste`) emits `PasteLong`: the input gets a `[Pasted text #N +M lines]` token, the text is held in `pastes`; chip click toggles a scrollable viewer card (image chips: full-image thumbnail, click opens a separate large viewer window; blur-close is suspended while it is open, Esc/click closes it), × removes it. Tokens are expanded (`expand_pastes`) on inject and for every AI action.
+
+## Input history (`settings.input_history`, `src/popup.rs`)
+
+- Every inject records its text (pastes expanded, last 30, deduped) in settings. The clock icon next to the speaker in the header toggles a scrollable list under the input; clicking a row puts that text back in the input.
+
 ## AI result display (`src/popup.rs`)
 
 - Enhance/explain keep the old text visible while the model works, then type the result into the input (typewriter, ~12ms ticks, whole text in ≤~40 steps). Errors leave the text untouched.
@@ -100,7 +122,7 @@
 
 ## AI actions (`src/popup.rs`, prompts in `src/ai.rs`)
 
-- `Cmd/Ctrl+R` refine (fix grammar/clarity, same language), `Cmd/Ctrl+E` enhance (rewrite a rough idea into a structured prompt for an AI, same language), `Cmd/Ctrl+T` translate, `Cmd/Ctrl+Enter` explain, `Cmd/Ctrl+O` attach. Input window is 680px wide. With an empty input, refine/enhance/translate/explain work on the selected-text context instead (`action_source`).
+- `Cmd/Ctrl+R` refine (fix grammar/clarity, same language), `Cmd/Ctrl+E` enhance (rewrite a rough idea into a structured prompt for an AI, same language), `Cmd/Ctrl+T` translate, `Cmd/Ctrl+Enter` explain, `Cmd/Ctrl+O` attach. Input window is 740px wide. With an empty input, refine/enhance/translate/explain work on the selected-text context instead (`action_source`).
 
 ## Read aloud (`src/speech.rs`)
 

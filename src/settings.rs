@@ -15,6 +15,8 @@ pub struct Settings {
     pub ai_base_url: String,
     pub ai_model: String,
     pub ai_key: String,
+    pub image_model: String,
+    pub input_history: Vec<String>,
     pub ai_history: Vec<AiHistoryEntry>,
     pub search_key: String,
     pub hotkey: String,
@@ -25,6 +27,7 @@ pub struct Settings {
     pub main_language: String,
     pub hide_on_blur: bool,
     pub auto_send: bool,
+    pub auto_launch: bool,
     pub follow_cursor: bool,
     pub prefill_selection: bool,
     pub selection_context: bool,
@@ -34,8 +37,6 @@ pub struct Settings {
     /// The two main languages AI actions work in (codes, see `ai::lang_name`).
     pub lang_a: String,
     pub lang_b: String,
-    /// Speech-to-text model for the microphone button.
-    pub stt_model: String,
 }
 
 /// Per-OS hotkey presets (label, value); the first one is the default.
@@ -54,6 +55,8 @@ impl Default for Settings {
             ai_base_url: "https://api.openai.com/v1".to_string(),
             ai_model: "gpt-4o-mini".to_string(),
             ai_key: String::new(),
+            image_model: "gpt-image-1".to_string(),
+            input_history: Vec::new(),
             ai_history: Vec::new(),
             search_key: String::new(),
             hotkey,
@@ -64,6 +67,7 @@ impl Default for Settings {
             main_language: "en".to_string(),
             hide_on_blur: true,
             auto_send: false,
+            auto_launch: false,
             follow_cursor: false,
             prefill_selection: false,
             selection_context: true,
@@ -72,7 +76,6 @@ impl Default for Settings {
             ui_lang: "en".to_string(),
             lang_a: "en".to_string(),
             lang_b: "vi".to_string(),
-            stt_model: "whisper-1".to_string(),
         }
     }
 }
