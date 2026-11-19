@@ -1,4 +1,24 @@
-# Logs
+# Rust / Cargo
+target/
+**/*.rs.bk
+*.pdb
+.cargo/
+
+# Build & packaging artifacts
+dist/
+dist-ssr/
+*.app/
+*.dmg
+*.deb
+*.AppImage
+*.exe
+*.msi
+
+# Legacy Tauri leftovers
+node_modules/
+src-tauri/gen/
+
+# Logs & local debug
 logs
 *.log
 npm-debug.log*
@@ -6,25 +26,36 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
 *.local
 
-# Editor directories and files
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*~
+
+# Editors & IDEs
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
+.zed/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
 
-# Rust build
-/target
-
-# Local Claude Code config
+# Local AI / agent configs
 .claude/
+.cursor/
+.codex/
+.gemini/
