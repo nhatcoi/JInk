@@ -1464,7 +1464,10 @@ impl JInkPopup {
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
                                         this.trigger_inject(this.settings.auto_send, window, cx);
                                     }))
-                                    .child(tr(&self.settings.ui_lang, "insert")),
+                                    .child(tr(
+                                        &self.settings.ui_lang,
+                                        if self.settings.auto_send { "send" } else { "insert" },
+                                    )),
                             ),
                     ),
             )
